@@ -1,0 +1,185 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[portuguese]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{geometry}
+\geometry{a4paper, left=2.2cm, right=2.2cm, top=2.2cm, bottom=2.2cm}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{tcolorbox}
+\usepackage{fancyhdr}
+\usepackage{enumitem}
+\usepackage{float}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    urlcolor=teal!70!black
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{\small TOMSA 2026 -- Guia de Execução Passo a Passo}
+\lhead{\small ISEP -- Sistemas Autónomos}
+\cfoot{\thepage}
+
+\definecolor{boxbg}{rgb}{0.95,0.97,1.0}
+\definecolor{boxframe}{rgb}{0.2,0.4,0.7}
+\definecolor{codebg}{rgb}{0.1,0.13,0.18}
+\definecolor{codetext}{rgb}{0.9,0.95,1.0}
+
+\lstset{
+    backgroundcolor=\color{codebg},
+    basicstyle=\ttfamily\small\color{codetext},
+    breaklines=true,
+    frame=single,
+    rulecolor=\color{black!30},
+    showstringspaces=false
+}
+
+\title{
+    \vspace{-1.0cm}
+    \textbf{INSTITUTO SUPERIOR DE ENGENHARIA DO PORTO}\\[0.2cm]
+    \large Tópicos de Matemática para Sistemas Autónomos (TOMSA 2026)\\[0.4cm]
+    \Large \textbf{Guia Prático Passo a Passo: Onde e Como Executar o Sistema Multi-Robô}\\[0.2cm]
+    \large \textit{Instruções Claras de Terminal, Dashboard Web em Plotly, Visualização QGIS e Google Earth}
+}
+
+\author{\textbf{Geovani Lopes Debastiani} (Nº 1211756)}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{tcolorbox}[colback=boxbg,colframe=boxframe,title=\textbf{Resposta Rápida: Onde Rodar o Programa?}]
+O programa deve ser executado no \textbf{Terminal (linha de comandos)} do seu sistema ou no terminal integrado do VS Code / Antigravity IDE, posicionado na pasta principal do projeto:
+\begin{center}
+\texttt{/home/geovani/antigravityProjects/ISEP/TOMSA}
+\end{center}
+\textbf{Se não quiser usar o terminal}, pode simplesmente clicar duas vezes no ficheiro HTML gerado:
+\begin{center}
+\texttt{multi\_robot\_system/output/mission\_dashboard\_bundle.html}
+\end{center}
+Ele abre imediatamente no Google Chrome ou Firefox com todas as 3 vistas e controlos a funcionar!
+\end{tcolorbox}
+
+\vspace{0.4cm}
+
+% -------------------------------------------------------------
+\section{Passo 1: Abrir o Terminal no Sítio Certo}
+% -------------------------------------------------------------
+
+Tem duas opções muito simples para abrir o terminal no local correto:
+
+\subsection{Opção A: No próprio editor (Recomendado)}
+\begin{enumerate}[leftmargin=1.5cm]
+    \item No menu superior do seu editor (VS Code / Antigravity), clique em \textbf{Terminal} $\to$ \textbf{New Terminal} (ou prima o atalho \texttt{Ctrl + `}).
+    \item O terminal abre na parte inferior do ecrã já dentro da pasta \texttt{TOMSA}.
+    \item Para confirmar que está na pasta certa, digite:
+\begin{lstlisting}
+pwd
+\end{lstlisting}
+    Deve aparecer: \texttt{/home/geovani/antigravityProjects/ISEP/TOMSA}.
+\end{enumerate}
+
+\subsection{Opção B: No Terminal do Linux (Ubuntu / Debian)}
+Abra a aplicação ``Terminal'' do Linux e navegue até à pasta com:
+\begin{lstlisting}
+cd /home/geovani/antigravityProjects/ISEP/TOMSA
+\end{lstlisting}
+
+% -------------------------------------------------------------
+\section{Passo 2: Comandos para Executar o Programa}
+% -------------------------------------------------------------
+
+Copie e cole diretamente um dos seguintes comandos no terminal:
+
+\subsection{1. Lançar o Dashboard Web Interativo (Plotly)}
+Este é o comando principal que inicia o servidor local e abre o navegador automaticamente:
+\begin{lstlisting}
+PYTHONPATH=. .venv/bin/python3 multi_robot_system/main.py --web
+\end{lstlisting}
+\begin{itemize}[nosep]
+    \item O navegador abrirá automaticamente em: \url{http://127.0.0.1:8050}.
+    \item Para parar o servidor quando terminar, basta carregar em \texttt{Ctrl + C} no terminal.
+\end{itemize}
+
+\subsection{2. Exportar Ficheiros Geoespaciais (QGIS, Google Earth e CSV)}
+Gera as trajetórias sincronizadas e os ficheiros de mapa:
+\begin{lstlisting}
+PYTHONPATH=. .venv/bin/python3 multi_robot_system/main.py --export
+\end{lstlisting}
+Ficheiros criados na pasta \texttt{multi\_robot\_system/output/}:
+\begin{itemize}[nosep]
+    \item \texttt{mission\_trajectories.geojson} (para abrir no QGIS).
+    \item \texttt{mission\_trajectories\_3d.kml} (para abrir no Google Earth).
+    \item \texttt{synchronized\_trajectories.csv} (telemetria alinhada).
+\end{itemize}
+
+\subsection{3. Correr os Testes Unitários de Matemática (Pytest)}
+Executa a validação formal de todos os 24 testes matemáticos:
+\begin{lstlisting}
+PYTHONPATH=. .venv/bin/pytest multi_robot_system/tests/ -v
+\end{lstlisting}
+
+\subsection{4. Correr Tudo Automaticamente (--all)}
+\begin{lstlisting}
+PYTHONPATH=. .venv/bin/python3 multi_robot_system/main.py --all
+\end{lstlisting}
+
+% -------------------------------------------------------------
+\section{Passo 3: Como Usar o Dashboard Web e as Teclas de Atalho}
+% -------------------------------------------------------------
+
+Quando a página web abrir no navegador, dispõe dos seguintes controlos interativos:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{cp{10.5cm}}
+\toprule
+\textbf{Tecla / Botão} & \textbf{O que Faz} \\
+\midrule
+\textbf{Tecla \texttt{1}} & Seleciona o \textbf{Robot 1} (AUV Alpha -- Vermelho). \\
+\textbf{Tecla \texttt{2}} & Seleciona o \textbf{Robot 4} (AUV Bravo -- Verde). \\
+\textbf{Tecla \texttt{3}} & Seleciona o \textbf{Robot 7} (AUV Charlie -- Azul). \\
+\addlinespace
+\textbf{Tecla \texttt{V}} & \textbf{Alterna entre as 3 Vistas}:
+\begin{itemize}[nosep]
+    \item \textbf{1. Global 3D}: Cenário com fundo do mar, superfície da água e rasto progressivo.
+    \item \textbf{2. POV (1ª Pessoa)}: Câmara no bico do submarino com mira nos outros veículos.
+    \item \textbf{3. Cockpit}: Painel de instrumentos com horizonte artificial, bússola, profundímetro, radar e alerta $<10\text{m}$.
+\end{itemize} \\
+\addlinespace
+\textbf{Tecla \texttt{R}} & \textbf{Reinicia as trajetórias} (volta o replay imediatamente ao segundo zero). \\
+\textbf{Barra de Espaço} & \textbf{Play / Pausa} da animação. \\
+\addlinespace
+\textbf{Botões de Velocidade} & Escolha entre \textbf{0.25x} (Lento), \textbf{1x} (Normal), \textbf{5x} (Rápido) ou \textbf{Ultra Rápido} (percorre a missão inteira em apenas 2 segundos). \\
+\bottomrule
+\end{tabular}
+\caption{Guia de controlos rápidos da interface web.}
+\end{table}
+
+% -------------------------------------------------------------
+\section{Passo 4: Como Abrir no QGIS e Google Earth}
+% -------------------------------------------------------------
+
+\subsection{Abrir no QGIS (GeoJSON)}
+\begin{enumerate}[nosep]
+    \item Abra o programa \textbf{QGIS}.
+    \item No menu superior: clique em \textbf{Camada} $\to$ \textbf{Adicionar Camada} $\to$ \textbf{Adicionar Camada Vetorial}.
+    \item Escolha o ficheiro: \texttt{multi\_robot\_system/output/mission\_trajectories.geojson}.
+    \item As trajetórias aparecerão no mar da Aguçadoura. Se adicionar o mapa de satélite da Google ou OpenStreetMap no painel \textit{XYZ Tiles}, vê a costa portuguesa com os robôs no oceano!
+\end{enumerate}
+
+\subsection{Abrir no Google Earth (KML 3D)}
+\begin{enumerate}[nosep]
+    \item Abra o \textbf{Google Earth Pro} (ou aceda a \url{https://earth.google.com}).
+    \item Vá a \textbf{Ficheiro} $\to$ \textbf{Abrir} $\to$ selecione \texttt{multi\_robot\_system/output/mission\_trajectories\_3d.kml}.
+    \item O globo voa para Portugal e a barra de tempo permite ver os submarinos a submergir em 3D.
+\end{enumerate}
+
+\end{document}

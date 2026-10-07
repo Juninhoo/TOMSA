@@ -1,0 +1,269 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[portuguese]{babel}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{geometry}
+\geometry{a4paper, left=2.5cm, right=2.5cm, top=2.5cm, bottom=2.5cm}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{microtype}
+\usepackage{float}
+\usepackage{fancyhdr}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{caption}
+
+% Notacao matematica
+\newcommand{\vv}[1]{\mathbf{#1}}
+\newcommand{\Rot}{\mathbf{R}}
+\newcommand{\Id}{\mathbf{I}}
+\newcommand{\T}{^{\mathsf{T}}}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    citecolor=blue!70!black,
+    urlcolor=teal!70!black
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{\small TOMSA 2026 -- Requisitos e Arquitetura Unificada}
+\lhead{\small ISEP -- Sistemas Autónomos}
+\cfoot{\thepage}
+
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.97,0.97,0.97}
+
+\lstdefinestyle{pythonstyle}{
+    backgroundcolor=\color{backcolour},
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{blue!80!black}\bfseries,
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,
+    breaklines=true,
+    captionpos=b,
+    keepspaces=true,
+    numbers=left,
+    numbersep=5pt,
+    showspaces=false,
+    showstringspaces=false,
+    showtabs=false,
+    tabsize=4,
+    frame=single,
+    rulecolor=\color{black!20}
+}
+\lstset{style=pythonstyle}
+
+\title{
+    \vspace{-1.5cm}
+    \textbf{INSTITUTO SUPERIOR DE ENGENHARIA DO PORTO}\\[0.2cm]
+    \large Tópicos de Matemática para Sistemas Autónomos (TOMSA 2026)\\[0.6cm]
+    \Large \textbf{Especificação de Requisitos, Diagnóstico dos Dados e Arquitetura de Software Unificada para o Visualizador Multi-Robô}\\[0.3cm]
+    \large \textit{Consolidação dos Subsistemas Plotly 3D, Vista em 1.ª Pessoa (POV), Filtro Kalman/RTS, Alinhamento Kabsch-Umeyama e Análise de Proximidade CPA}
+}
+
+\author{
+    \textbf{Geovani Lopes Debastiani} (Nº 1211756)\\
+    \texttt{1211756@isep.ipp.pt}
+}
+
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Este documento estabelece a consolidação formal dos requisitos, o diagnóstico técnico das anomalias encontradas nas telemetrias reais do INESC TEC (Aguçadoura) e a especificação da arquitetura de software unificada para o sistema multi-robô subaquático da unidade curricular de TOMSA (2026). Atualmente, a base de código encontra-se fragmentada em três implementações parciais: o projeto de referência \texttt{TOMSA}, o visualizador estático 3D \texttt{trajectories} e o módulo de câmara em primeira pessoa \texttt{vista\_primeira\_pessoa}. O objetivo primordial consiste em fundir organicamente estas soluções num único projeto modular, robusto, multithreaded e centrado numa interface web interativa em Plotly/Dash. Abordam-se os requisitos funcionais de suavização cinemática via Filtro de Kalman com suavizador RTS (\textit{Rauch-Tung-Striebel}), alinhamento rígido de referenciais pelo algoritmo de Kabsch-Umeyama, análise de segurança e proximidade (AER, CPA e deteção de colisões), bem como a exportação geoespacial (KML e GeoJSON).
+\end{abstract}
+
+\vspace{0.3cm}
+\tableofcontents
+\newpage
+
+% -------------------------------------------------------------
+\section{Introdução e Contexto do Projeto}
+% -------------------------------------------------------------
+
+O projeto tem como finalidade primordial o processamento, sincronização, análise geométrica e visualização tridimensional de veículos marinhos autónomos (AUVs e ASVs) com base em registos reais de odometria (\texttt{nav\_msgs/Odometry} do ecossistema ROS) recolhidos pelo INESC TEC em campanhas marítimas na Aguçadoura (\texttt{robot1\_s1.csv}, \texttt{robot4\_s1.csv}, \texttt{robot7\_s1.csv}).
+
+\subsection{Estado Atual e Fragmentação de Código}
+Na estrutura existente, coexistem três ramificações isoladas:
+\begin{enumerate}
+    \item \textbf{Projeto Base (\texttt{TOMSA})}: Contém a formulação matemática rigorosa de coordenadas (Geodésico WGS-84, ECEF, NED, ENU, AER), classes de dados estruturadas, configuração YAML e visualização interativa em Matplotlib (2D/3D com slider temporal).
+    \item \textbf{Visualizador 3D Plotly (\texttt{trajectories / uwv})}: Gera um ficheiro HTML interativo autónomo em Plotly com os rastos dos 3 robôs em coordenadas NED locais e profundidade ($D$), permitindo rotação e inspeção 3D fluida.
+    \item \textbf{Câmara em 1.ª Pessoa (\texttt{vista\_primeira\_pessoa})}: Implementa um servidor web local com projeção de câmara \textit{pinhole} a partir do referencial do corpo de cada drone (POV -- \textit{Point of View}), permitindo alternar de ponto de vista através das teclas 1, 2, 3, mas operando com discrepâncias de origem e orientação.
+\end{enumerate}
+
+O utilizador estipulou a necessidade imperativa de unificar todas estas capacidades numa única arquitetura integrada e de alta performance, utilizando o \textbf{Plotly} como visualizador principal e incorporando ferramentas matemáticas avançadas de suavização, alinhamento e análise de proximidade.
+
+% -------------------------------------------------------------
+\section{Diagnóstico Técnico das Discrepâncias e Dados Reais}
+% -------------------------------------------------------------
+
+O utilizador reportou que os ficheiros \texttt{robotX\_s1.csv} aparentavam estar ``corrompidos'' ou não coincidir entre os visualizadores. A análise minuciosa aos dados revelou que os dados não estão corrompidos, mas sofrem de quatro causas matemáticas e operacionais objetivas:
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lp{6.2cm}p{6.8cm}}
+\toprule
+\textbf{Discrepância} & \textbf{Causa Raiz Identificada} & \textbf{Solução na Arquitetura Unificada} \\
+\midrule
+\textbf{1. Desvio de Origem ($p_0$)} & A pasta \texttt{trajectories} calcula a origem pela média de todas as amostras ($\bar{\varphi}, \bar{\lambda}, \bar{h}$); a pasta \texttt{vista\_primeira\_pessoa} usa a média dos robôs carregados; o projeto \texttt{TOMSA} usa a origem oficial de superfície do INESC TEC ($\varphi_0=41.452017^\circ, \lambda_0=-8.813222^\circ, h_0=55.447911\,\text{m}$). & Unificar num único ponto de referência configurável via \texttt{config.yaml}, garantindo equivalência milimétrica em todas as vistas. \\
+\addlinespace
+\textbf{2. Assincronismo Temporal} & Cada robô foi amostrado a instantes desfasados (período médio $\Delta t \approx 0.534\,\text{s}$), com instantes de início e fim distintos (janela comum entre $t \approx 1.626\times 10^9$ s). & Criar uma grelha temporal mestre regularizada, aplicando Filtro de Kalman e suavizador RTS para alinhar perfeitamente os estados. \\
+\addlinespace
+\textbf{3. Inversão do Robot 7} & O Robot 7 apresenta quaternions de orientação rodados em $\sim 180^\circ$ em relação ao vetor velocidade de avanço (marcha-atrás ou referencial local ROS com convenção invertida no sensor). & Implementar deteção automática de coerência cinemática (ângulo entre $\vv{v}$ e o eixo longitudinal $x_b$) e aplicar correção controlada por parâmetro. \\
+\addlinespace
+\textbf{4. Mapeamento de Eixos} & O referencial NED usa $z$ para baixo, enquanto o motor 3D do Plotly adota convenção gráfica ($x$ direita, $y$ frente, $z$ cima). & Mapeamento isométrico formal: $X_{\text{Plotly}} = E$, $Y_{\text{Plotly}} = N$, $Z_{\text{Plotly}} = -D = h - h_0$. \\
+\bottomrule
+\end{tabular}
+\caption{Matriz de diagnóstico das discrepâncias entre os módulos existentes.}
+\end{table}
+
+% -------------------------------------------------------------
+\section{Catálogo Estruturado de Requisitos}
+% -------------------------------------------------------------
+
+\subsection{Requisitos Funcionais (RF)}
+
+\begin{enumerate}[label=\textbf{RF\arabic*:},leftmargin=1.5cm]
+    \item \textbf{Visualização Principal em Plotly 3D}: A interface central do sistema deve ser construída em Plotly/Dash (ou HTML5 interativo gerado por Plotly), suportando navegação espacial completa (rotação, pan, zoom e vistas axiais).
+    \item \textbf{Modo Global View}: Representação simultânea das trajetórias de todos os robôs no referencial de missão comum (NED/ENU), com diferenciação de cores, marcadores de início/fim e indicação da posição em tempo real.
+    \item \textbf{Modo POV / 1.ª Pessoa (Local Body View)}: Capacidade de assumir a perspetiva de qualquer um dos submarinos, posicionando a câmara na pose do veículo e projetando os outros robôs no campo de visão relativo, alternando interativamente entre veículos (teclas 1, 2, 3 ou seletor).
+    \item \textbf{Replay Temporal Interativo}: Controlo da reprodução com barra temporal deslizante (\textit{time slider}), botões \textit{Play/Pause}, ajuste de velocidade ($1\times, 2\times, 5\times, 10\times$) e salto para instantes específicos.
+    \item \textbf{Filtragem e Suavização Cinemática (Kalman + RTS Smoother)}: Implementação de um Filtro de Kalman linear/cinemático acoplado a um suavizador de Rauch-Tung-Striebel (RTS), eliminando ruído de GPS/odometria e reconstruindo estados contínuos de posição e velocidade.
+    \item \textbf{Alinhamento de Referenciais (Kabsch-Umeyama)}: Módulo capaz de estimar a rotação ótima $\Rot \in SO(3)$, translação $\vv{t} \in \mathbb{R}^3$ e fator de escala $s \in \mathbb{R}^+$ entre trajetórias expressas em referenciais não coincidentes, quantificando o RMSE do alinhamento.
+    \item \textbf{Análise de Proximidade e Segurança (AER, CPA, Colisão)}: Cálculo contínuo da distância relativa entre todos os pares de robôs, determinação de Azimute, Elevação e Alcance (AER) na vista local, cálculo do Ponto de Maior Aproximação (\textit{Closest Point of Approach} -- CPA) e emissão de alertas gráficos de perigo de colisão.
+    \item \textbf{Tabela Comparativa de Interpoladores}: Módulo para comparação quantitativa de interpolação Linear, Spline Cúbica e Filtro de Kalman/RTS sobre os mesmos dados de telemetria, reportando métricas de erro (RMSE, erro máximo e continuidade).
+    \item \textbf{Exportação Geoespacial (KML e GeoJSON)}: Exportação direta das trajetórias processadas e eventos de aproximação para ficheiros \texttt{.kml} e \texttt{.geojson}, permitindo abertura direta no Google Earth e no QGIS.
+    \item \textbf{Configuração Unificada (YAML)}: Todas as propriedades da missão (origem geodésica, ficheiros de dados, limiares de alarme, parâmetros do filtro e opções de visualização) devem ser parametrizáveis via ficheiro YAML sem necessidade de alteração de código.
+\end{enumerate}
+
+\subsection{Requisitos Não-Funcionais e Arquiteturais (RNF)}
+
+\begin{enumerate}[label=\textbf{RNF\arabic*:},leftmargin=1.5cm]
+    \item \textbf{Separação Estrita de Responsabilidades}: Organização em pastas temáticas independentes: matemática (\texttt{core/math}), carregamento e filtragem de dados (\texttt{core/data}), visualização Plotly e POV (\texttt{visualization}), servidor/threads (\texttt{server}), e controlo/CLI principal (\texttt{main.py}).
+    \item \textbf{Concorrência e Multithreading}: A renderização gráfica e o servidor web não devem bloquear durante o processamento matemático ou leitura de ficheiros volumosos; utilização de \textit{background workers} em threads dedicadas.
+    \item \textbf{Rigor Matemático Sem Bibliotecas Opacas}: Todo o núcleo computacional de transformações WGS-84, quaternions, Kalman/RTS, Kabsch-Umeyama e CPA deve ser implementado de raiz em NumPy/C++, usando bibliotecas externas (\texttt{pymap3d}, \texttt{scipy}) apenas para validação e testes unitários.
+    \item \textbf{Desempenho e Latência}: Resposta imediata na interação com o slider temporal ($< 50\,\text{ms}$ por quadro renderizado), permitindo experiência fluida a 20+ FPS no navegador.
+    \item \textbf{Testabilidade e Cobertura}: Cobertura de testes unitários automatizados em \texttt{pytest}, validando invariantes geométricas ($\Rot\T\Rot = \Id$, $\det\Rot = 1$, ida-e-volta com erro $< 10^{-6}\,\text{m}$).
+\end{enumerate}
+
+% -------------------------------------------------------------
+\section{Arquitetura de Software Proposta}
+% -------------------------------------------------------------
+
+A nova organização estrutural do projeto consolidado é desenhada para garantir modularidade absoluta, alta manutenibilidade e extensibilidade:
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.85\textwidth]{figures/coordinate_frames_diagram.pdf}
+\caption{Fluxograma concetual da cadeia de referenciais matemáticos e processamento.}
+\end{figure}
+
+\subsection{Estrutura de Ficheiros e Módulos do Novo Projeto}
+
+Abaixo apresenta-se a taxonomia de ficheiros da pasta unificada do projeto:
+
+\begin{lstlisting}[language=bash,caption={Estrutura de pastas do projeto integrado}]
+multi_robot_system/
+|-- config/
+|   +-- mission_config.yaml         # Parametrizacao integral da missao
+|-- data/
+|   |-- robot1_s1.csv               # Telemetria real INESC TEC Robot 1
+|   |-- robot4_s1.csv               # Telemetria real INESC TEC Robot 4
+|   +-- robot7_s1.csv               # Telemetria real INESC TEC Robot 7
+|-- core/
+|   |-- __init__.py
+|   |-- math/
+|   |   |-- geodesy.py              # WGS-84, ECEF, NED, ENU, AER (NumPy puro)
+|   |   |-- rotations.py            # Quaternions, matrizes SO(3), Euler, SLERP
+|   |   |-- kalman_rts.py           # Filtro de Kalman linear e Suavizador RTS
+|   |   |-- umeyama.py              # Algoritmo de Kabsch-Umeyama (R, t, s, RMSE)
+|   |   |-- proximity.py            # Vetores relativos, AER e calculo analitico de CPA
+|   |   +-- interpolators.py        # Comparador Linear vs Spline Cubica vs Kalman
+|   +-- data/
+|       |-- odom_loader.py          # Leitor robusto de CSV ROS Odometry
+|       |-- trajectory.py           # Dataclass RobotTrajectory e MissionDataset
+|       +-- synchronizer.py         # Sincronizador temporal e regularizacao de tempo
+|-- visualization/
+|   |-- __init__.py
+|   |-- plotly_3d_view.py           # Visualizador global 3D interativo em Plotly
+|   |-- plotly_pov_view.py          # Motor de camara em 1a pessoa (POV submarino)
+|   |-- hud_renderer.py             # Instrumentacao e telemetria sobreposta (HUD)
+|   +-- dashboard_app.py            # Servidor web integrado (Plotly Dash/Flask)
+|-- io_export/
+|   |-- geojson_exporter.py         # Exportador para SIG (QGIS)
+|   |-- kml_exporter.py             # Exportador para Google Earth 3D
+|   +-- report_generator.py         # Exportador de metricas JSON e relatorios
+|-- tests/
+|   |-- test_geodesy.py             # Validacao vs pymap3d e pyproj
+|   |-- test_rotations.py           # Testes de grupo SO(3) e quaternioes
+|   |-- test_kalman_rts.py          # Verificacao de reducao de covariancia
+|   |-- test_umeyama.py             # Teste com rotacoes e ruidos sinteticos
+|   +-- test_cpa.py                 # Validacao do tempo e distancia minima CPA
+|-- docs/
+|   |-- especificacao_requisitos.pdf
+|   +-- fundamentacao_matematica.pdf
+|-- main.py                         # Ponto de entrada CLI (arranque de modos)
+|-- requirements.txt                # Dependencias Python (numpy, scipy, plotly, etc.)
++-- README.md                       # Manual de instalacao e execucao
+\end{lstlisting}
+
+\subsection{Fluxo de Dados e Concorrência Multithreaded}
+
+\begin{enumerate}
+    \item \textbf{Carregamento e Pré-Processamento (Thread de Inicialização)}:
+    \begin{itemize}
+        \item O ficheiro \texttt{odom\_loader.py} lê os CSVs em streaming de blocos vetoriais.
+        \item As coordenadas $(\varphi, \lambda, h)$ são convertidas para ECEF e projetadas em NED relativamente à origem de superfície configurada.
+        \item O módulo \texttt{kalman\_rts.py} processa as trajetórias, gerando uma estimativa suavizada e contínua dos estados $(\vv{p}, \vv{v})$ e atitudes $(\vv{q})$.
+    \end{itemize}
+    \item \textbf{Servidor Web e Engine de Renderização (Thread de Interface)}:
+    \begin{itemize}
+        \item Um servidor leve assíncrono em Python gere as sessões do navegador.
+        \item O cliente web interage com um único dashboard onde um botão seletor permite comutar instantaneamente entre:
+        \begin{itemize}
+            \item \textbf{Vista Global 3D}: Visão panorâmica estilo \texttt{trajectories.html} com todos os submarinos, malha de fundo e batimetria.
+            \item \textbf{Vista POV 1.ª Pessoa}: Câmara acoplada ao bico de cada drone com HUD dinâmico e mira para os robôs circundantes.
+        \end{itemize}
+    \end{itemize}
+    \item \textbf{Motor de Análise Cinemática em Background}:
+    \begin{itemize}
+        \item Os cálculos de proximidade, CPA e matriz de distâncias relativas correm em estruturas pré-vetorizadas em memória, permitindo inspeção instantânea ao movimentar a barra temporal.
+    \end{itemize}
+\end{enumerate}
+
+% -------------------------------------------------------------
+\section{Roteiro de Implementação e Validação}
+% -------------------------------------------------------------
+
+A consolidação do projeto seguirá cinco marcos metodológicos:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{Fase} & \textbf{Atividades Principais} & \textbf{Entregável Chave} \\
+\midrule
+\textbf{Fase 1} & Esclarecimento dos requisitos com as 50 perguntas e validação teórica. & Questionário respondido. \\
+\textbf{Fase 2} & Criação da estrutura de pastas modular e migração do núcleo matemático. & Pacote \texttt{core/math} testado. \\
+\textbf{Fase 3} & Implementação de Kalman/RTS, Kabsch-Umeyama e análise CPA. & Scripts com validação numérica. \\
+\textbf{Fase 4} & Unificação das vistas Plotly 3D e POV em primeira pessoa com threading. & Dashboard web interativo. \\
+\textbf{Fase 5} & Exportadores KML/GeoJSON, documentação final em LaTeX e revisão geral. & Projeto integrado completo. \\
+\bottomrule
+\end{tabular}
+\caption{Cronograma metodológico de integração.}
+\end{table}
+
+\end{document}

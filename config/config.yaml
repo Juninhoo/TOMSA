@@ -1,0 +1,47 @@
+# Configuração da Missão TOMSA 2026 - INESC TEC Aguçadoura
+
+# Referência inicial na superfície (Origem Local Tangente)
+origin:
+  latitude: 41.45201666666667   # Graus decimais
+  longitude: -8.81322222222222   # Graus decimais
+  altitude: 55.44791126176966   # Metros acima do nível do mar
+
+# Referencial de visualização global: 'NED' (North-East-Down) ou 'ENU' (East-North-Up)
+frame: NED
+
+# Lista de robôs participantes na missão
+robots:
+  - id: "Robot 1"
+    file: "data/robot1_s1.csv"
+    color: "#E63946"  # Vermelho
+    label: "ASV Alpha (Robot 1)"
+  - id: "Robot 4"
+    file: "data/robot4_s1.csv"
+    color: "#2A9D8F"  # Verde Petróleo
+    label: "ASV Bravo (Robot 4)"
+  - id: "Robot 7"
+    file: "data/robot7_s1.csv"
+    color: "#1D3557"  # Azul Marinho
+    label: "ASV Charlie (Robot 7)"
+
+# Robô selecionado como referência para a Vista Local
+selected_robot: "Robot 1"
+
+# Parâmetros de análise espacial e alertas
+spatial:
+  neighbor_radius_m: 250.0      # Raio de vizinhança na Vista Local (metros)
+  collision_threshold_m: 30.0   # Limiar de aviso de proximidade/colisão (metros)
+  covariance_sigma: 2.0         # Fator de escala para elipses de covariância (95% confiança)
+
+# Parâmetros de Replay da Missão
+replay:
+  step_s: 1.0                   # Passo temporal da animação (segundos)
+  fps: 15                       # Taxa de quadros por segundo
+  speed_multiplier: 5.0         # Fator de aceleração da reprodução
+
+# Ficheiros de exportação e registo
+output:
+  log_file: "output/mission_execution.log"
+  export_csv: "output/synchronized_trajectories.csv"
+  metrics_file: "output/mission_metrics.json"
+  figures_dir: "docs/figures"

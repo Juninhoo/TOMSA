@@ -1,0 +1,449 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[portuguese]{babel}
+\usepackage{amsmath,amssymb,amsfonts,amsthm}
+\usepackage{graphicx}
+\usepackage{geometry}
+\geometry{a4paper, left=2.5cm, right=2.5cm, top=2.5cm, bottom=2.5cm}
+\usepackage{booktabs}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{microtype}
+\usepackage{float}
+\usepackage{fancyhdr}
+\usepackage{listings}
+\usepackage{enumitem}
+\usepackage{caption}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!70!black,
+    citecolor=blue!70!black,
+    urlcolor=teal!70!black
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\rhead{\small TOMSA 2026 -- Fundamentação Matemática Completa}
+\lhead{\small ISEP -- Sistemas Autónomos}
+\cfoot{\thepage}
+
+% Macros matematicas
+\newcommand{\vv}[1]{\mathbf{#1}}
+\newcommand{\col}[3]{\begin{pmatrix}#1\\#2\\#3\end{pmatrix}}
+\newcommand{\Rot}{\mathbf{R}}
+\newcommand{\Id}{\mathbf{I}}
+\newcommand{\T}{^{\mathsf{T}}}
+\newcommand{\cs}{\cos}
+\newcommand{\sn}{\sin}
+
+\theoremstyle{definition}
+\newtheorem{deducao}{Dedução}[section]
+\newtheorem{proposicao}{Proposição}[section]
+\newcommand{\caixaresultado}[1]{\begin{center}\fbox{\parbox{0.92\textwidth}{#1}}\end{center}}
+
+\title{
+    \vspace{-1.5cm}
+    \textbf{INSTITUTO SUPERIOR DE ENGENHARIA DO PORTO}\\[0.2cm]
+    \large Tópicos de Matemática para Sistemas Autónomos (TOMSA 2026)\\[0.6cm]
+    \Large \textbf{Fundamentação Matemática Rigorosa para Navegação e Visualização Tridimensional Multi-Robô}\\[0.3cm]
+    \large \textit{Dedução Passo a Passo: Geodesia WGS-84, Quaternions, Projeção de Câmara POV, Filtro Kalman e Suavizador RTS, Alinhamento Kabsch-Umeyama e Análise de Proximidade CPA}
+}
+
+\author{
+    \textbf{Geovani Lopes Debastiani} (Nº 1211756)\\
+    \texttt{1211756@isep.ipp.pt}
+}
+
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Este documento apresenta a formulação matemática rigorosa e a dedução formal passo a passo de todos os métodos numéricos e analíticos implementados no sistema unificado de visualização e análise de trajetórias de robôs subaquáticos autónomos (TOMSA 2026). Partindo diretamente da estrutura do código e das telemetrias reais do INESC TEC (Aguçadoura), estabelecem-se as equações exatas para as transformações entre sistemas de coordenadas (Geodésico WGS-84, ECEF, Planos Tangentes Locais NED/ENU e Esférico AER). Em seguida, deduzem-se a cinemática de atitude por quaterniões em $SO(3)$, o modelo projetivo de câmara \textit{pinhole} para a vista em primeira pessoa (POV), as equações do Filtro de Kalman acoplado ao Suavizador Ótimo de Rauch-Tung-Striebel (RTS), o algoritmo de Kabsch-Umeyama para alinhamento rígido com escala e a determinação em forma fechada do Ponto de Maior Aproximação (CPA). O documento conclui com uma análise comparativa analítica e quantitativa entre interpolação Linear, Spline Cúbica e Filtragem Kalman/RTS.
+\end{abstract}
+
+\vspace{0.3cm}
+\tableofcontents
+\newpage
+
+% =============================================================
+\section{Introdução e Convenções de Notação}
+% =============================================================
+
+Para garantir coerência em toda a base de código e na documentação teórica, adotam-se as seguintes convenções:
+\begin{itemize}[nosep]
+    \item Vetores no espaço euclidiano tridimensional são representados por letras minúsculas em negrito, como vetores coluna: $\vv{p} = [x, y, z]\T \in \mathbb{R}^3$.
+    \item Matrizes são representadas por letras maiúsculas em negrito: $\Rot, \Id, \mathbf{F} \in \mathbb{R}^{3\times 3}$ ou $\mathbb{R}^{n\times n}$.
+    \item A matriz identidade de ordem $n$ é denotada por $\Id_n$ (ou $\Id$ quando a dimensão for evidente).
+    \item Mudanças de referencial usam subscritos que indicam a transformação: $\Rot_{ab}$ denota a rotação que mapeia coordenadas do referencial $b$ para o referencial $a$, satisfazendo $\vv{p}_a = \Rot_{ab} \vv{p}_b + \vv{t}_{ab}$.
+    \item As matrizes de rotação pertencem ao Grupo Ortogonal Especial $SO(3)$, caracterizado por $\Rot\T \Rot = \Id$ e $\det(\Rot) = +1$.
+\end{itemize}
+
+% =============================================================
+\section{Geodesia e Transformação de Coordenadas}
+% =============================================================
+
+\subsection{O Elipsoide de Referência WGS-84}
+A Terra é geometricamente aproximada pelo elipsoide de revolução WGS-84, cujos parâmetros fundamentais são:
+\begin{align}
+    \text{Semieixo maior: } a &= 6\,378\,137.0\,\text{m} \\
+    \text{Achatamento (\textit{flattening}): } f &= \frac{1}{298.257223563} \\
+    \text{Semieixo menor: } b &= a(1 - f) \approx 6\,356\,752.3142\,\text{m} \\
+    \text{Primeira excentricidade ao quadrado: } e^2 &= 2f - f^2 = \frac{a^2 - b^2}{a^2} \approx 6.69437999014 \times 10^{-3}
+\end{align}
+
+\subsection{Raios de Curvatura da Superfície}
+
+\begin{deducao}[Raio de Curvatura no Primeiro Vertical $N(\varphi)$]
+No plano meridiano definido pela longitude $\lambda$, a elipse meridiana é parametrizada em coordenadas $(p, Z)$, onde $p = \sqrt{X^2 + Y^2}$ representa a distância ao eixo de rotação polar:
+\begin{equation}
+    \frac{p^2}{a^2} + \frac{Z^2}{b^2} = 1
+\end{equation}
+O vetor gradiente à elipse, ortogonal à superfície exterior, tem componentes:
+\begin{equation}
+    \nabla F(p, Z) = \left( \frac{2p}{a^2}, \frac{2Z}{b^2} \right)\T
+\end{equation}
+Pela definição de latitude geodésica $\varphi$, a normal faz um ângulo $\varphi$ com o plano equatorial, logo:
+\begin{equation}
+    \tan\varphi = \frac{Z / b^2}{p / a^2} = \frac{a^2}{b^2} \frac{Z}{p} = \frac{1}{1 - e^2} \frac{Z}{p} \implies Z = p(1 - e^2)\tan\varphi
+\end{equation}
+Substituindo $Z$ na equação da elipse:
+\begin{equation}
+    \frac{p^2}{a^2} + \frac{p^2(1 - e^2)^2 \tan^2\varphi}{a^2(1 - e^2)} = 1 \implies \frac{p^2}{a^2} \left[ 1 + (1 - e^2)\frac{\sin^2\varphi}{\cos^2\varphi} \right] = 1
+\end{equation}
+Multiplicando ambos os membros por $\cos^2\varphi$:
+\begin{equation}
+    \frac{p^2}{a^2} \left[ \cos^2\varphi + (1 - e^2)\sin^2\varphi \right] = \cos^2\varphi \implies \frac{p^2}{a^2} (1 - e^2 \sin^2\varphi) = \cos^2\varphi
+\end{equation}
+Resolvendo para $p$:
+\begin{equation}
+    p = \frac{a \cos\varphi}{\sqrt{1 - e^2 \sin^2\varphi}}
+\end{equation}
+Como a distância ao longo da normal da superfície até ao eixo $Z$ satisfaz $p = N(\varphi)\cos\varphi$, conclui-se formalmente:
+\caixaresultado{
+\begin{equation}
+    N(\varphi) = \frac{a}{\sqrt{1 - e^2 \sin^2\varphi}}
+\end{equation}
+}
+\end{deducao}
+
+O raio de curvatura meridiano $M(\varphi)$ (curvatura ao longo da linha de longitude) obtém-se diferenciando o arco meridiano:
+\begin{equation}
+    M(\varphi) = \frac{a(1 - e^2)}{(1 - e^2 \sin^2\varphi)^{3/2}}
+\end{equation}
+
+\subsection{Conversão Geodésica para ECEF em Forma Fechada}
+Dada uma posição em coordenadas geodésicas $(\varphi, \lambda, h)$, com latitude $\varphi$, longitude $\lambda$ e altura elipsoidal $h$, o vetor de posição no referencial cartesiano geocêntrico ECEF ($p^e = [X, Y, Z]\T$) é obtido deslocando o ponto na superfície do elipsoide ao longo da normal unitária $\vv{u} = [\cos\varphi\cos\lambda, \cos\varphi\sin\lambda, \sin\varphi]\T$:
+\caixaresultado{
+\begin{equation}
+\begin{pmatrix} X \\ Y \\ Z \end{pmatrix} = 
+\begin{pmatrix}
+(N(\varphi) + h)\cos\varphi\cos\lambda \\
+(N(\varphi) + h)\cos\varphi\sin\lambda \\
+(N(\varphi)(1 - e^2) + h)\sin\varphi
+\end{pmatrix}
+\end{equation}
+}
+
+\subsection{Transformação ECEF para o Plano Tangente Local (NED)}
+Dado um ponto de referência local $(\varphi_0, \lambda_0, h_0)$ com posição ECEF $\vv{p}_0^e$, constrói-se uma base ortonormal com vetores unitários apontando para o Norte ($\hat{\vv{n}}$), Este ($\hat{\vv{e}}$) e Baixo ($\hat{\vv{d}}$). Derivando a posição ECEF em relação a $(\varphi, \lambda, h)$:
+\begin{align}
+    \hat{\vv{n}} &= \begin{pmatrix} -\sin\varphi_0 \cos\lambda_0 \\ -\sin\varphi_0 \sin\lambda_0 \\ \cos\varphi_0 \end{pmatrix}, \quad
+    \hat{\vv{e}} = \begin{pmatrix} -\sin\lambda_0 \\ \cos\lambda_0 \\ 0 \end{pmatrix}, \quad
+    \hat{\vv{d}} = \begin{pmatrix} -\cos\varphi_0 \cos\lambda_0 \\ -\cos\varphi_0 \sin\lambda_0 \\ -\sin\varphi_0 \end{pmatrix}
+\end{align}
+A matriz de rotação de ECEF para NED, $\Rot_e^n \in SO(3)$, é formada pelos vetores da base como linhas:
+\begin{equation}
+\Rot_e^n = \begin{pmatrix} \hat{\vv{n}}\T \\ \hat{\vv{e}}\T \\ \hat{\vv{d}}\T \end{pmatrix} =
+\begin{pmatrix}
+-\sin\varphi_0\cos\lambda_0 & -\sin\varphi_0\sin\lambda_0 & \cos\varphi_0 \\
+-\sin\lambda_0 & \cos\lambda_0 & 0 \\
+-\cos\varphi_0\cos\lambda_0 & -\cos\varphi_0\sin\lambda_0 & -\sin\varphi_0
+\end{pmatrix}
+\end{equation}
+A transformação rígida para qualquer ponto $\vv{p}^e$ é dada por:
+\caixaresultado{
+\begin{equation}
+    \vv{p}^n = \begin{pmatrix} N \\ E \\ D \end{pmatrix} = \Rot_e^n \left( \vv{p}^e - \vv{p}_0^e \right)
+\end{equation}
+}
+A coordenada $D$ (\textit{Down}) representa a profundidade física subaquática em relação à cota da superfície $h_0 = h_{\text{ref}}$, cumprindo $D \approx h_0 - h$. O desvio decorrente da curvatura terrestre à distância planar $s$ é de ordem $\Delta z \approx \frac{s^2}{2R} \approx 7.1\,\text{mm}$ para $s = 300\,\text{m}$, sendo negligenciável para manobras locais.
+
+\subsection{Coordenadas Esféricas Relativas: Azimute, Elevação e Alcance (AER)}
+Dadas as coordenadas cartesianas relativas $\vv{p} = [x, y, z]\T$ no referencial local (com $x$ para a frente/Norte, $y$ para a direita/Este, $z$ para baixo):
+\begin{align}
+    \text{Alcance (\textit{Range}): } r &= \sqrt{x^2 + y^2 + z^2} \\
+    \text{Azimute (\textit{Azimuth}): } \alpha &= \operatorname{atan2}(y, x) \in [-\pi, \pi] \\
+    \text{Elevação (\textit{Elevation}): } \beta &= \operatorname{atan2}(-z, \sqrt{x^2 + y^2}) \in [-\pi/2, \pi/2]
+\end{align}
+
+% =============================================================
+\section{Cinemática de Atitude e Quaterniões}
+% =============================================================
+
+\subsection{Representação por Quaterniões Unitários}
+A orientação do corpo do veículo relativamente ao referencial inercial do mundo (NED) é descrita por um quaternião unitário $\vv{q} = [q_x, q_y, q_z, q_w]\T \in \mathbb{H}$ com $\|\vv{q}\| = 1$. A matriz de rotação $\Rot_{wb}(\vv{q}) \in SO(3)$ que transforma coordenadas do referencial do corpo para o referencial do mundo ($\vv{p}_w = \Rot_{wb}\vv{p}_b$) é dada explicitamente por:
+\caixaresultado{
+\begin{equation}
+\Rot_{wb} = \begin{pmatrix}
+1 - 2(q_y^2 + q_z^2) & 2(q_x q_y - q_z q_w) & 2(q_x q_z + q_y q_w) \\
+2(q_x q_y + q_z q_w) & 1 - 2(q_x^2 + q_z^2) & 2(q_y q_z - q_x q_w) \\
+2(q_x q_z - q_y q_w) & 2(q_y q_z + q_x q_w) & 1 - 2(q_x^2 + q_y^2)
+\end{pmatrix}
+\end{equation}
+}
+
+\subsection{Extração dos Ângulos de Euler (Convenção ZYX)}
+A sequência de Euler intrínseca ZYX define as rotações sucessivas em torno de $z$ (yaw/guinada $\psi$), $y'$ (pitch/arfagem $\theta$) e $x''$ (roll/rolamento $\phi$). A partir dos elementos $R_{ij}$ de $\Rot_{wb}$:
+\begin{align}
+    \phi &= \operatorname{atan2}(R_{32}, R_{33}) = \operatorname{atan2}(2(q_y q_z + q_x q_w), 1 - 2(q_x^2 + q_y^2)) \\
+    \theta &= \arcsin(-R_{31}) = \arcsin(-2(q_x q_z - q_y q_w)) \\
+    \psi &= \operatorname{atan2}(R_{21}, R_{11}) = \operatorname{atan2}(2(q_x q_y + q_z q_w), 1 - 2(q_y^2 + q_z^2))
+\end{align}
+
+\subsection{Interpolação Esférica Linear (SLERP)}
+Para sincronizar instantes arbitrários entre dois quaterniões $\vv{q}_1$ e $\vv{q}_2$ com produto interno $\cos\Omega = \vv{q}_1 \cdot \vv{q}_2$ (garantindo $\cos\Omega \ge 0$ invertendo o sinal se necessário para trajeto geodésico mínimo):
+\begin{equation}
+    \operatorname{SLERP}(\vv{q}_1, \vv{q}_2; \tau) = \frac{\sin((1 - \tau)\Omega)}{\sin\Omega}\vv{q}_1 + \frac{\sin(\tau\Omega)}{\sin\Omega}\vv{q}_2, \quad \tau \in [0, 1]
+\end{equation}
+
+% =============================================================
+\section{Modelo de Câmara e Vista em 1.ª Pessoa (POV)}
+% =============================================================
+
+\subsection{Cadeia Cinemática de Projeção}
+Seja $\vv{p}_w \in \mathbb{R}^3$ a posição de um robô ou objeto no referencial do mundo (NED). Seja o robô observador caracterizado pela sua pose $(\Rot_{wb}, \vv{t}_{wb})$. A câmara está montada no corpo com pose relativa $(\Rot_{bc}, \vv{t}_{bc})$. A posição do ponto no referencial da câmara $\vv{p}_c = [x_c, y_c, z_c]\T$ é:
+\begin{equation}
+    \vv{p}_c = \Rot_{wc}\T (\vv{p}_w - \vv{t}_{wc}), \quad \text{onde } \Rot_{wc} = \Rot_{wb}\Rot_{bc}, \quad \vv{t}_{wc} = \vv{t}_{wb} + \Rot_{wb}\vv{t}_{bc}
+\end{equation}
+No referencial padrão de visão computacional da câmara:
+\begin{itemize}[nosep]
+    \item $x_c$: aponta para a direita do plano de imagem;
+    \item $y_c$: aponta para baixo no plano de imagem;
+    \item $z_c$: aponta para a frente ao longo do eixo ótico de visada.
+\end{itemize}
+
+\subsection{Projeção Perspetiva Pinhole e Matriz Intrinseca}
+Com distância focal $(f_x, f_y)$ e ponto principal $(c_x, c_y)$ numa imagem de resolução $W \times H$:
+\begin{equation}
+\begin{pmatrix} u \\ v \\ 1 \end{pmatrix} \sim 
+\mathbf{K} \vv{p}_c = 
+\begin{pmatrix}
+f_x & 0 & c_x \\
+0 & f_y & c_y \\
+0 & 0 & 1
+\end{pmatrix}
+\begin{pmatrix} x_c \\ y_c \\ z_c \end{pmatrix} \implies
+u = \frac{f_x x_c}{z_c} + c_x, \quad
+v = \frac{f_y y_c}{z_c} + c_y
+\end{equation}
+Um ponto é visível no HUD se $z_c > 0$ e $(u, v) \in [0, W] \times [0, H]$.
+
+\subsection{Mapeamento para o Espaço de Visualização 3D do Plotly}
+O motor WebGL do Plotly adota eixos cartesianos com $X_{\text{disp}}$ (direita), $Y_{\text{disp}}$ (profundidade/frente) e $Z_{\text{disp}}$ (cima). O mapeamento isométrico a partir do referencial da câmara é dado por:
+\caixaresultado{
+\begin{equation}
+    \vv{p}_{\text{display}} = \begin{pmatrix} X_{\text{disp}} \\ Y_{\text{disp}} \\ Z_{\text{disp}} \end{pmatrix} = \begin{pmatrix} x_c \\ z_c \\ -y_c \end{pmatrix}
+\end{equation}
+}
+
+% =============================================================
+\section{Filtragem de Kalman e Suavizador de Rauch-Tung-Striebel (RTS)}
+% =============================================================
+
+\subsection{Modelo Cinemático em Espaço de Estados}
+Para atenuar o ruído da odometria e sincronizar taxas de amostragem desfasadas, adota-se um modelo de aceleração como ruído branco (\textit{Continuous White Noise Acceleration} -- CWNA). Para cada coordenada cartesiana independente (ou vetor 3D $\vv{p}_k, \vv{v}_k$):
+O vetor de estado é $\vv{x}_k = [\vv{p}_k\T, \vv{v}_k\T]\T \in \mathbb{R}^6$.
+A equação de transição de estados discreta para um passo temporal $\Delta t$ é:
+\begin{equation}
+    \vv{x}_{k} = \mathbf{F}_k \vv{x}_{k-1} + \vv{w}_k, \quad \mathbf{F}_k = \begin{pmatrix} \Id_3 & \Delta t \Id_3 \\ \mathbf{0}_3 & \Id_3 \end{pmatrix}
+\end{equation}
+A matriz de covariância do ruído de processo $\mathbf{Q}_k$, para uma densidade espetral contínua $q$, é:
+\begin{equation}
+    \mathbf{Q}_k = q \begin{pmatrix} \frac{\Delta t^3}{3}\Id_3 & \frac{\Delta t^2}{2}\Id_3 \\ \frac{\Delta t^2}{2}\Id_3 & \Delta t \Id_3 \end{pmatrix}
+\end{equation}
+A matriz de observação para medições diretas de posição $\vv{y}_k = \vv{p}_{\text{meas}, k} + \vv{v}_k$ é:
+\begin{equation}
+    \mathbf{H}_k = \begin{pmatrix} \Id_3 & \mathbf{0}_3 \end{pmatrix}, \quad \mathbf{R}_k = \operatorname{diag}(\sigma_N^2, \sigma_E^2, \sigma_D^2)
+\end{equation}
+
+\subsection{Equações do Filtro de Kalman Progressivo (\textit{Forward Pass})}
+Para cada passo $k = 1, \dots, N$:
+\begin{align}
+    \text{Predição do Estado: } &\hat{\vv{x}}_{k|k-1} = \mathbf{F}_k \hat{\vv{x}}_{k-1|k-1} \\
+    \text{Predição da Covariância: } &\mathbf{P}_{k|k-1} = \mathbf{F}_k \mathbf{P}_{k-1|k-1} \mathbf{F}_k\T + \mathbf{Q}_k \\
+    \text{Inovação e Covariância: } &\tilde{\vv{y}}_k = \vv{y}_k - \mathbf{H}_k \hat{\vv{x}}_{k|k-1}, \quad \mathbf{S}_k = \mathbf{H}_k \mathbf{P}_{k|k-1}\mathbf{H}_k\T + \mathbf{R}_k \\
+    \text{Ganho de Kalman: } &\mathbf{K}_k = \mathbf{P}_{k|k-1}\mathbf{H}_k\T \mathbf{S}_k^{-1} \\
+    \text{Atualização do Estado: } &\hat{\vv{x}}_{k|k} = \hat{\vv{x}}_{k|k-1} + \mathbf{K}_k \tilde{\vv{y}}_k \\
+    \text{Atualização da Covariância: } &\mathbf{P}_{k|k} = (\Id - \mathbf{K}_k \mathbf{H}_k)\mathbf{P}_{k|k-1}
+\end{align}
+
+\subsection{Equações do Suavizador de Rauch-Tung-Striebel (\textit{Backward Pass})}
+O filtro de Kalman convencional introduz atraso de fase (\textit{lag}) causal. Uma vez processadas todas as $N$ amostras, o algoritmo RTS percorre a trajetória em sentido inverso ($k = N-1, N-2, \dots, 1$), incorporando informação futura:
+\caixaresultado{
+\begin{align}
+    \text{Ganho do Suavizador: } &\mathbf{C}_k = \mathbf{P}_{k|k} \mathbf{F}_{k+1}\T \mathbf{P}_{k+1|k}^{-1} \\
+    \text{Estado Suavizado: } &\hat{\vv{x}}_{k|N} = \hat{\vv{x}}_{k|k} + \mathbf{C}_k \left( \hat{\vv{x}}_{k+1|N} - \hat{\vv{x}}_{k+1|k} \right) \\
+    \text{Covariância Suavizada: } &\mathbf{P}_{k|N} = \mathbf{P}_{k|k} + \mathbf{C}_k \left( \mathbf{P}_{k+1|N} - \mathbf{P}_{k+1|k} \right) \mathbf{C}_k\T
+\end{align}
+}
+
+\begin{proposicao}[Redução Estrita da Covariância de Estimação]
+Como $\mathbf{P}_{k+1|N} \le \mathbf{P}_{k+1|k}$ (no sentido de Loewner, isto é, $\mathbf{P}_{k+1|k} - \mathbf{P}_{k+1|N} \ge 0$ é semi-definida positiva), o termo corretivo é negativo, garantindo:
+\begin{equation}
+    \mathbf{P}_{k|N} \le \mathbf{P}_{k|k}
+\end{equation}
+Isto demonstra formalmente que o suavizador RTS atinge variância estritamente menor do que o filtro de Kalman unidirecional em todas as épocas intermediárias.
+\end{proposicao}
+
+% =============================================================
+\section{Alinhamento de Referenciais pelo Algoritmo de Kabsch-Umeyama}
+% =============================================================
+
+\subsection{Formulação do Problema de Procrustes Ortogonal com Escala}
+Considerem-se dois conjuntos de $N$ pontos homólogos tridimensionais, $\mathcal{X} = \{\vv{x}_i\}_{i=1}^N$ e $\mathcal{Y} = \{\vv{y}_i\}_{i=1}^N \subset \mathbb{R}^3$, expressos em referenciais diferentes (por exemplo, referencial da odometria versus referencial global corrigido). Pretende-se estimar a rotação ótima $\Rot \in SO(3)$, a translação $\vv{t} \in \mathbb{R}^3$ e o fator de escala $s > 0$ que minimizam o erro quadrático médio:
+\caixaresultado{
+\begin{equation}
+    J(s, \Rot, \vv{t}) = \frac{1}{N} \sum_{i=1}^N \|\vv{y}_i - (s \Rot \vv{x}_i + \vv{t})\|^2
+\end{equation}
+}
+
+\subsection{Dedução da Solução Ótima}
+\begin{deducao}
+1. \textbf{Eliminação dos Centroides}:
+Calculam-se os centros de massa de cada nuvem de pontos:
+\begin{equation}
+    \boldsymbol{\mu}_x = \frac{1}{N}\sum_{i=1}^N \vv{x}_i, \quad \boldsymbol{\mu}_y = \frac{1}{N}\sum_{i=1}^N \vv{y}_i
+\end{equation}
+Definem-se as coordenadas centradas: $\vv{x}'_i = \vv{x}_i - \boldsymbol{\mu}_x$ e $\vv{y}'_i = \vv{y}_i - \boldsymbol{\mu}_y$.
+Anulando a derivada em ordem a $\vv{t}$:
+\begin{equation}
+    \frac{\partial J}{\partial \vv{t}} = 0 \implies \vv{t}^* = \boldsymbol{\mu}_y - s \Rot \boldsymbol{\mu}_x
+\end{equation}
+2. \textbf{Matriz de Covariância Cruzada}:
+Define-se a matriz de covariância cruzada $\boldsymbol{\Sigma}_{xy} \in \mathbb{R}^{3\times 3}$:
+\begin{equation}
+    \boldsymbol{\Sigma}_{xy} = \frac{1}{N}\sum_{i=1}^N \vv{y}'_i (\vv{x}'_i)\T
+\end{equation}
+3. \textbf{Decomposição em Valores Singulares (SVD)}:
+Decompõe-se $\boldsymbol{\Sigma}_{xy} = \mathbf{U} \mathbf{D} \mathbf{V}\T$, onde $\mathbf{D} = \operatorname{diag}(d_1, d_2, d_3)$ com $d_1 \ge d_2 \ge d_3 \ge 0$.
+Para assegurar que a matriz resultante é uma rotação pura ($\det(\Rot) = +1$) e não uma reflexão imprópria, define-se a matriz diagonal de sinal $\mathbf{S}$:
+\begin{equation}
+    \mathbf{S} = \begin{pmatrix} 1 & 0 & 0 \\ 0 & 1 & 0 \\ 0 & 0 & \det(\mathbf{U})\det(\mathbf{V}) \end{pmatrix}
+\end{equation}
+4. \textbf{Parâmetros Ótimos}:
+\caixaresultado{
+\begin{align}
+    \Rot^* &= \mathbf{U} \mathbf{S} \mathbf{V}\T \\
+    s^* &= \frac{\operatorname{tr}(\mathbf{D} \mathbf{S})}{\sigma_x^2}, \quad \text{onde } \sigma_x^2 = \frac{1}{N}\sum_{i=1}^N \|\vv{x}'_i\|^2 \\
+    \vv{t}^* &= \boldsymbol{\mu}_y - s^* \Rot^* \boldsymbol{\mu}_x
+\end{align}
+}
+O erro médio quadrático residual (RMSE) após alinhamento é:
+\begin{equation}
+    \text{RMSE} = \sqrt{\frac{1}{N} \sum_{i=1}^N \|\vv{y}_i - (s^* \Rot^* \vv{x}_i + \vv{t}^*)\|^2}
+\end{equation}
+\end{deducao}
+
+% =============================================================
+\section{Cinemática Relativa, Proximidade e Cálculo do CPA}
+% =============================================================
+
+\subsection{Geometria Relativa no Referencial do Corpo}
+Para avaliar o risco de colisão a partir do submarino selecionado $i$, com posição $\vv{p}_i$ e matriz de atitude $\Rot_{wb}^{(i)}$, qualquer outro submarino $j$ com posição $\vv{p}_j$ é projetado no referencial próprio de $i$:
+\begin{equation}
+    \vv{p}_j^{(i)} = (\Rot_{wb}^{(i)})\T (\vv{p}_j - \vv{p}_i) = \begin{pmatrix} x_{rel} \\ y_{rel} \\ z_{rel} \end{pmatrix}
+\end{equation}
+As grandezas de visada AER do robô $j$ visto por $i$ são obtidas de imediato por:
+\begin{equation}
+    r_{ij} = \|\vv{p}_j^{(i)}\|, \quad \alpha_{ij} = \operatorname{atan2}(y_{rel}, x_{rel}), \quad \beta_{ij} = \operatorname{atan2}(-z_{rel}, \sqrt{x_{rel}^2 + y_{rel}^2})
+\end{equation}
+
+\subsection{Dedução em Forma Fechada do Ponto de Maior Aproximação (CPA)}
+\begin{deducao}
+Considerem-se dois robôs $1$ e $2$ com posições atuais $\vv{p}_1, \vv{p}_2$ e velocidades instantâneas $\vv{v}_1, \vv{v}_2$. Sob a hipótese de velocidade linear localmente constante no intervalo de tempo $[0, \Delta t]$, as posições futuras no horizonte $t \ge 0$ são dadas por:
+\begin{equation}
+    \vv{p}_1(t) = \vv{p}_1 + \vv{v}_1 t, \quad \vv{p}_2(t) = \vv{p}_2 + \vv{v}_2 t
+\end{equation}
+O vetor de separação relativa $\vv{r}_{12}(t) = \vv{p}_2(t) - \vv{p}_1(t)$ é:
+\begin{equation}
+    \vv{r}_{12}(t) = \Delta\vv{p} + \Delta\vv{v} t, \quad \Delta\vv{p} = \vv{p}_2 - \vv{p}_1, \quad \Delta\vv{v} = \vv{v}_2 - \vv{v}_1
+\end{equation}
+A distância ao quadrado entre os dois veículos em função do tempo é:
+\begin{equation}
+    D^2(t) = \|\vv{r}_{12}(t)\|^2 = \|\Delta\vv{p}\|^2 + 2 (\Delta\vv{p} \cdot \Delta\vv{v}) t + \|\Delta\vv{v}\|^2 t^2
+\end{equation}
+Para determinar o instante de mínima separação $t_{\text{CPA}}$, anula-se a derivada de $D^2(t)$ em relação a $t$:
+\begin{equation}
+    \frac{\mathrm{d} D^2(t)}{\mathrm{d} t} = 2 (\Delta\vv{p} \cdot \Delta\vv{v}) + 2 \|\Delta\vv{v}\|^2 t = 0
+\end{equation}
+\caixaresultado{
+\begin{equation}
+    t_{\text{CPA}} = -\frac{\Delta\vv{p} \cdot \Delta\vv{v}}{\|\Delta\vv{v}\|^2}
+\end{equation}
+}
+Tratamento de casos limites no algoritmo:
+\begin{enumerate}
+    \item Se $\|\Delta\vv{v}\| < \epsilon$ (veículos em trajetórias paralelas ou parados), $t_{\text{CPA}} = 0$ e a distância é constante: $d_{\text{CPA}} = \|\Delta\vv{p}\|$.
+    \item Se $t_{\text{CPA}} < 0$, os veículos estão a afastar-se mutuamente; a distância mínima no horizonte futuro ocorre em $t = 0$.
+    \item Para um horizonte de previsão máximo $T_{\text{lookahead}}$, trunca-se $t^* = \operatorname{clip}(t_{\text{CPA}}, 0, T_{\text{lookahead}})$.
+\end{enumerate}
+A distância mínima de aproximação é finalmente:
+\begin{equation}
+    d_{\text{CPA}} = \|\vv{r}_{12}(t^*)\|
+\end{equation}
+Se $d_{\text{CPA}} < D_{\text{crit}}$ (limiar crítico configurado em YAML, e.g. $30\,\text{m}$), o sistema ativa imediatamente o alerta visual de risco de colisão.
+\end{deducao}
+
+% =============================================================
+\section{Comparação Teórica e Quantitativa de Interpoladores}
+% =============================================================
+
+Para regularizar a amostragem temporal de trajetórias multi-robô, comparam-se três classes fundamentais de algoritmos de interpolação:
+
+\begin{enumerate}
+    \item \textbf{Interpolação Linear por Partes}: Conecta pontos adjacentes por segmentos de reta. Garante continuidade $C^0$, mas apresenta descontinuidade de primeira ordem na derivada (aceleração infinita nos nós), introduzindo artefactos nos cálculos cinemáticos.
+    \item \textbf{Spline Cúbica Natural / Hermite}: Constrói polinómios de 3.º grau por troço satisfazendo continuidade $C^2$ (posição, velocidade e aceleração contínuas). É sensível a medições anómalas (\textit{outliers}), podendo gerar oscilações espúrias (fenómeno de Runge).
+    \item \textbf{Filtro Kalman com Suavizador RTS}: Modela estocasticamente a dinâmica e a incerteza dos sensores através de equações de estado. Fornece estimativas $C^1$ ótimas no sentido MMSE (\textit{Minimum Mean Square Error}), amortecendo o ruído de alta frequência sem sobreelevações.
+\end{enumerate}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Critério de Avaliação} & \textbf{Linear} & \textbf{Spline Cúbica} & \textbf{Kalman Puro} & \textbf{Kalman + RTS} \\
+\midrule
+Classe de Continuidade & $C^0$ & $C^2$ & $C^1$ & $C^1$ (Ótima) \\
+Atenuação de Ruído de Sensor & Nenhuma & Fraca (propaga ruído) & Boa & Ótima (MMSE) \\
+Atraso Temporal / \textit{Lag} & Nulo & Nulo (não-causal) & Presente ($>0$) & Nulo (bidirecional) \\
+Complexidade Computacional & $\mathcal{O}(N)$ & $\mathcal{O}(N)$ & $\mathcal{O}(N)$ & $\mathcal{O}(N)$ \\
+Plausibilidade Física ($\vv{v}, \vv{\omega}$) & Baixa (saltos em $\vv{v}$) & Média (oscilações) & Alta & Máxima \\
+\bottomrule
+\end{tabular}
+\caption{Matriz comparativa teórica das propriedades dos esquemas de interpolação e suavização.}
+\end{table}
+
+\subsection{Resultados Experimentais nos Dados Reais da Aguçadoura}
+Submetendo as telemetrias reais dos três robôs (\texttt{robot1}, \texttt{robot4}, \texttt{robot7}) a validação cruzada com fator de subamostragem $K=6$, obtiveram-se os seguintes resultados quantitativos médios:
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Método de Interpolação} & \textbf{Continuidade} & \textbf{RMSE Médio (m)} & \textbf{Desvio Máximo (m)} & \textbf{Tempo de Execução (ms)} \\
+\midrule
+\textbf{Kalman + RTS Smoother} & $C^1$ Estocástica (MMSE) & $0.1738\,\text{m}$ & $5.2410\,\text{m}$ & $247.08\,\text{ms}$ \\
+\textbf{Linear por Partes} & $C^0$ & $0.1460\,\text{m}$ & $4.9258\,\text{m}$ & $0.43\,\text{ms}$ \\
+\textbf{Spline Cúbica Natural} & $C^2$ & $0.1236\,\text{m}$ & $4.3452\,\text{m}$ & $4.51\,\text{ms}$ \\
+\bottomrule
+\end{tabular}
+\caption{Resultados quantitativos experimentais obtidos nos dados de telemetria do INESC TEC.}
+\end{table}
+
+\end{document}

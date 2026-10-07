@@ -1,0 +1,76 @@
+# ==============================================================================
+# TOMSA 2026 - Configuração Geral da Missão Multi-Robô Subaquática
+# INESC TEC (Aguçadoura) - Sistema Unificado
+# ==============================================================================
+
+# Origem de Referência Local de Superfície (WGS-84)
+# Conforme especificação oficial do INESC TEC para as campanhas de Aguçadoura
+origin:
+  # 'data_mean' = origem calculada dos dados (média lat/lon; superfície = mediana das 1as 50 alturas),
+  # igual ao visualizador de referência trajectories/. 'fixed' = usa os valores abaixo.
+  mode: data_mean
+  latitude: 41.45201666666667   # Graus decimais (Norte positivo)
+  longitude: -8.81322222222222  # Graus decimais (Este positivo)
+  altitude: 55.44791126176966   # Metros acima do elipsoide WGS-84 (Superfície do mar)
+
+# Referencial de navegação global padrão: 'NED' (North-East-Down) ou 'ENU' (East-North-Up)
+# Em NED, z representa diretamente a profundidade abaixo do nível do mar (z >= 0)
+frame: NED
+
+# Lista de veículos participantes da missão
+robots:
+  - id: "Robot 1"
+    file: "data/robot1_s1.csv"
+    color: "#E63946"  # Vermelho vibrante
+    label: "AUV Alpha (Robot 1)"
+  - id: "Robot 4"
+    file: "data/robot4_s1.csv"
+    color: "#2A9D8F"  # Verde esmeralda / azul petróleo
+    label: "AUV Bravo (Robot 4)"
+  - id: "Robot 7"
+    file: "data/robot7_s1.csv"
+    color: "#457B9D"  # Azul oceano
+    label: "AUV Charlie (Robot 7)"
+
+# Robô selecionado por omissão na inicialização
+selected_robot: "Robot 1"
+
+# Parâmetros de câmara (POV e Visão em 1ª Pessoa)
+camera:
+  fov_deg: 70.0                 # Campo de visão horizontal (graus)
+  aspect_ratio: 1.7777777778    # 16:9
+  near_clip_m: 0.5              # Distância mínima de corte
+  far_clip_m: 350.0             # Distância máxima de renderização
+
+# Parâmetros de análise espacial, segurança e proximidade
+spatial:
+  neighbor_radius_m: 250.0      # Raio de monitorização circundante
+  collision_threshold_m: 10.0   # Limiar de aviso crítico de colisão (< 10 metros)
+  seabed_margin_m: 5.0          # Margem de folga abaixo da cota mais funda
+
+# Parâmetros de filtragem estocástica e suavização
+filter:
+  use_rts_smoother: true        # Ativa o suavizador ótimo de Rauch-Tung-Striebel
+  process_noise_q: 0.05         # Densidade espetral do ruído de processo de aceleração
+  default_meas_std_m: 0.8       # Desvio-padrão caso o CSV não contenha covariância válida
+
+# Configuração da reprodução temporal (Mission Replay)
+replay:
+  step_s: 0.5                   # Intervalo temporal entre quadros
+  fps: 20                       # Taxa base de animação
+  speeds:
+    slow: 0.25                  # Modo câmara lenta
+    normal: 1.0                 # Tempo real 1x
+    fast: 5.0                   # 5x aceleração
+    faster: 10.0                # 10x aceleração
+    very_fast: 20.0             # 20x aceleração
+    ultra_fast: 50.0            # Missão completa reproduzida em ~2 segundos
+
+# Ficheiros de saída e exportação
+output:
+  export_csv: "multi_robot_system/output/synchronized_trajectories.csv"
+  geojson_file: "multi_robot_system/output/mission_trajectories.geojson"
+  kml_file: "multi_robot_system/output/mission_trajectories_3d.kml"
+  benchmark_file: "multi_robot_system/output/interpolator_comparison.csv"
+  web_host: "127.0.0.1"
+  web_port: 8050

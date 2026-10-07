@@ -1,0 +1,380 @@
+look at this:
+
+I. Global View
+Display all robots in a common world frame, Plot trajectories, Current robot positions, Robot
+identification by color
+2. Local View
+Select one robot, Display trajectory in its own local frame, Show heading/orientation, Show nearby
+robots transformed into the selected robot frame
+3. Mission Replay
+Time slider, Play/Pause animation, Jump to specific timestamps
+4. YAML-Based Configuration
+5. Output Log / Output Configuration
+
+Earth-Centered Earth-Fixed Coordinates
+An Earth-centered Earth-fixed (ECEF) system uses the Cartesian coordinates (X,Y,Z) to represent position
+relative to the center of the reference ellipsoid. The distance between the center of the ellipsoid and the
+center of the Earth depends on the reference ellipsoid.
+• The positive X-axis intersects the surface of the ellipsoid at 0° latitude and 0° longitude, where the
+equator meets the prime meridian.
+• The positive Y-axis intersects the surface of the ellipsoid at 0° latitude and 90° longitude.
+• The positive Z-axis intersects the surface of the ellipsoid at 90° latitude and 0° longitude, the North Pole.
+
+North-East-Down Coordinates
+4
+A north-east-down (NED) system uses the Cartesian coordinates (xNorth,yEast,zDown) to represent position
+relative to a local origin. The local origin is described by the geodetic coordinates (lat0,lon0,h0).
+Typically, the local origin of an NED system is above the surface of the Earth.
+• The positive xNorth-axis points north along the meridian of longitude containing lon0.
+• The positive yEast-axis points east along the parallel of latitude containing lat0.
+• The positive zDown-axis points downward along the ellipsoid normal
+
+Azimuth-Elevation-Range Coordinates
+5
+An azimuth-elevation-range (AER) system uses the spherical coordinates (az,elev,range) to represent position
+relative to a local origin. The local origin is described by the geodetic coordinates (lat0,lon0,h0). Azimuth,
+elevation, and slant range are dependent on a local Cartesian system, for example, an ENU system.
+• az, the azimuth, is the clockwise angle in the xEast-yNorth plane from the positive yNorth-axis to the
+projection of the object into the plane.
+• elev, the elevation, is the angle from the xEast-yNorth plane to the object.
+• range, the slant range, is the Euclidean distance between the object and the local origin
+
+Lab work 1 (~ week 3)
+• Objective identification and problem structuring
+• Justification of the relevance of the selected Python libraries
+• Proposed methodology for project development
+Lab work 1I (week 8)
+• Quality, organization, and usability of the developed code
+• Depth and rigor of the topics explored
+• Presentation, discussion, and defence of the project
+(If justified, a written questionnaire will be administered)
+
+• 2 students
+Computer Language
+• Python
+
+
+TÓPICOS DE MATEMÁTICA PARA SISTEMA AUTÓNOMOS
+
+ TRABALHO LETIVO - ENTREGA 1
+Nota 1: Todos elementos do grupo são responsáveis por esta entrega
+
+Nota 2: Todos elementos do grupo tomaram conhecimento das regras estabelecidas para o funcionamento da u.c. no [Moodle do ISEP](https://moodle.isep.ipp.pt)
+GRUPO
+N: XXXXXXXX Nome: Aluno1 
+N: XXXXXXXX Nome: Aluno2 
+
+Conteúdo
+
+* [1. Identificação dos objetivos e estruturação do problema](https://code-format.com/ipynb-viewer#1.-Identifca%C3%A7%C3%A3o-dos-objetivos-e-estrutura%C3%A7%C3%A3o-do-problema)
+* [2. Justificação da relevância das bibliotecas Python selecionadas](https://code-format.com/ipynb-viewer#2.-Justifica%C3%A7%C3%A3o-da-relev%C3%A2ncia-das-bibliotecas-Python-selecionadas)
+* [3. Metodologia proposta para o desenvolvimento do projeto](https://code-format.com/ipynb-viewer#3.-Metodologia-proposta-para-o-desenvolvimento-do-projeto)
+
+1. Identificação dos objetivos e estruturação do problema
+[De volta para "Conteúdo"](https://code-format.com/ipynb-viewer#Conte%C3%BAdo)
+2. Justificação da relevância das bibliotecas Python selecionadas
+[De volta para "Conteúdo"](https://code-format.com/ipynb-viewer#Conte%C3%BAdo)
+3. Metodologia proposta para o desenvolvimento do projeto
+
+essas são as instruções do trabalho entendes o que é para fazer? explica-me
+
+
+Sim, percebo. Resumo do que é pedido:
+
+O projeto
+
+Uma aplicação em Python, feita por 2 alunos, para visualizar e analisar as trajetórias de vários robôs (autónomos) que se movem no mundo real. Os dados de posição chegam em coordenadas geográficas/ECEF e tens de os converter para referenciais locais e mostrá-los.
+
+Funcionalidades exigidas
+Global View: todos os robôs num referencial comum (o "mundo"), com trajetórias, posições atuais e cada robô identificado por uma cor.
+Local View: escolhes um robô e vês a trajetória no referencial dele (ele é a origem), com a orientação/heading e os robôs vizinhos transformados para esse referencial.
+Mission Replay: slider de tempo, play/pause, saltar para um instante específico.
+Configuração em YAML: parâmetros (robôs, origem do referencial, ficheiros de dados, etc.) lidos de um ficheiro .yaml.
+Output Log / Configuration: guardar um log e/ou a configuração de saída.
+A matemática (o núcleo)
+
+Os três sistemas de coordenadas que colaste são as ferramentas para fazer as transformações:
+
+ECEF (X,Y,Z): cartesiano com origem no centro da Terra. É o formato "absoluto".
+NED / ENU: cartesiano local, com origem num ponto (lat0, lon0, h0). NED = Norte-Este-Baixo; ENU = Este-Norte-Cima. É o que usas para desenhar no plano.
+AER (azimute, elevação, distância): coordenadas esféricas relativas a uma origem local. Útil para dizer "o robô B está a X m, com azimute Y° em relação ao robô A".
+
+Fluxo típico: lat/lon/alt → ECEF → NED/ENU (origem comum) para a vista global; e para a vista local, usar a posição e o heading do robô selecionado como origem/rotação e transformar os outros para esse referencial (podes depois converter para AER se quiseres distância e azimute).
+
+O que é para entregar
+
+Entrega 1 (~semana 3), o notebook .ipynb (template "Tópicos de Matemática para Sistemas Autónomos"), com 3 secções:
+
+Identificação dos objetivos e estruturação do problema: o que vais resolver, entradas/saídas, módulos.
+Justificação das bibliotecas Python: porquê numpy, matplotlib, PyYAML, pymap3d/pyproj, etc.
+Metodologia proposta: como vais desenvolver (fases, ordem, testes, divisão de tarefas).
+
+Entrega 2 (semana 8), avaliada em:
+
+Qualidade, organização e usabilidade do código
+Profundidade e rigor dos tópicos explorados
+Apresentação, discussão e defesa (pode haver questionário escrito)
+Nota prática
+
+Não é pedido código agora, só o planeamento (Entrega 1). O código completo vem na Entrega 2.
+
+Queres que eu preencha o notebook da Entrega 1 (em português, com as três secções)?
+
+sim
+
+Notebook da Entrega 1 pronto, em português, com as 3 secções e o cabeçalho do grupo (falta preencher os números e nomes).
+
+1. Objetivos e problema: objetivos O1–O6, entradas/processamento/saídas, fórmulas (geodésico→ECEF→ENU/NED→AER e referencial local), arquitetura modular e riscos.
+2. Bibliotecas: tabela com NumPy, pandas, Matplotlib, PyYAML, pymap3d, pyproj, logging, pytest. As transformações são implementadas por nós e validadas contra pymap3d/pyproj. Inclui uma célula que verifica o ambiente.
+3. Metodologia: fases por semana até à Entrega 2, testes de validação, estrutura do repositório, exemplo de config.yaml e divisão de tarefas entre os 2 elementos.
+
+Pontos a confirmar com o docente ou a ajustar:
+
+O formato dos dados de entrada (assumi CSV com t, robot_id, lat, lon, alt, heading).
+A convenção de heading (Norte, sentido horário) e a divisão de tarefas.
+
+
+Notebook Summary
+File name
+Entrega1_Robots (1).ipynb
+File size
+15.2 KB
+Format version
+4.5
+Kernel
+python3
+Display name
+Python 3
+Language
+python
+Language version
+Not available
+Highlight
+python
+Total cells
+5
+Markdown cells
+4
+Code cells
+1
+Raw cells
+0
+Cells with outputs
+0
+Total saved outputs
+0
+Cells with errors
+0
+Embedded images
+0
+Processing time
+3ms
+
+Markdown [1]
+Copy
+Tópicos de Matemática para Sistemas Autónomos
+TRABALHO LETIVO - ENTREGA 1
+Nota 1: Todos os elementos do grupo são responsáveis por esta entrega.
+
+Nota 2: Todos os elementos do grupo tomaram conhecimento das regras estabelecidas para o funcionamento da u.c. no Moodle do ISEP.
+
+GRUPO
+
+N: XXXXXXXX Nome: Aluno1 N: XXXXXXXX Nome: Aluno2
+
+Conteúdo
+1. Identificação dos objetivos e estruturação do problema
+2. Justificação da relevância das bibliotecas Python selecionadas
+3. Metodologia proposta para o desenvolvimento do projeto
+
+Markdown [2]
+Copy
+1. Identificação dos objetivos e estruturação do problema
+De volta para "Conteúdo"
+
+1.1 Objetivo geral
+Desenvolver, em Python, uma aplicação para visualizar e analisar as trajetórias de vários robôs autónomos que se deslocam no mundo real, a partir de posições geodésicas (latitude, longitude, altitude) e orientação (heading) ao longo do tempo. A aplicação transforma os dados entre sistemas de coordenadas (geodésico, ECEF, ENU/NED, AER) e apresenta-os em vistas globais e locais, com reprodução temporal da missão.
+
+1.2 Objetivos específicos
+#	Objetivo	Resultado esperado
+O1	Global View	Todos os robôs num referencial comum, com trajetórias, posição atual e cor por robô
+O2	Local View	Trajetória no referencial do robô selecionado, heading, robôs vizinhos transformados para esse referencial
+O3	Mission Replay	Slider temporal, play/pause, salto para um instante
+O4	Configuração YAML	Robôs, ficheiros de dados, origem do referencial, cores e parâmetros definidos sem alterar código
+O5	Output log / configuration	Registo de execução e exportação da configuração/resultados usados
+O6	Rigor matemático	Transformações implementadas de raiz e validadas contra uma biblioteca de referência
+1.3 Estruturação do problema
+Entradas
+
+Ficheiro(s) de dados por robô (ou um único ficheiro): t, robot_id, lat, lon, alt, heading (formato CSV; a confirmar com o docente).
+Ficheiro config.yaml com a origem do referencial global $(\varphi0,\lambda0,h_0)$, lista de robôs, cores, robô selecionado, passo do replay, caminhos de saída.
+Processamento
+
+Leitura e validação dos dados (tipos, intervalos, timestamps ordenados, dados em falta).
+Conversão geodésico → ECEF → ENU/NED (referencial global comum).
+Alinhamento temporal das trajetórias (interpolação para instantes comuns).
+Para o robô selecionado: translação para a sua posição e rotação pelo seu heading (referencial local).
+Conversão opcional dos vizinhos para AER (azimute, elevação, distância) relativos ao robô selecionado.
+Saídas
+
+Global View, Local View e Replay interativos.
+Ficheiro de log e cópia da configuração efetivamente usada; exportação opcional de dados transformados (CSV) e figuras.
+1.4 Fundamentação matemática
+Geodésico → ECEF (elipsoide WGS-84: semieixo maior $a$, excentricidade $e$):
+
+$$N(\varphi)=\frac{a}{\sqrt{1-e^{2}\sin^{2}\varphi}}$$
+
+$$X=(N+h)\cos\varphi\cos\lambda,\qquad Y=(N+h)\cos\varphi\sin\lambda,\qquad Z=\left(N(1-e^{2})+h\right)\sin\varphi$$
+
+ECEF → ENU (origem local $(\varphi0,\lambda0,h0)$, com $\Delta\mathbf{r}=\mathbf{r}{ECEF}-\mathbf{r}_{0,ECEF}$):
+
+$$\begin{bmatrix}xE\\yN\\zU\end{bmatrix}= \begin{bmatrix} -\sin\lambda0 & \cos\lambda0 & 0\\ -\sin\varphi0\cos\lambda0 & -\sin\varphi0\sin\lambda0 & \cos\varphi0\\ \cos\varphi0\cos\lambda0 & \cos\varphi0\sin\lambda0 & \sin\varphi_0 \end{bmatrix}\Delta\mathbf{r}$$
+
+ENU ↔ NED: $xN=yN^{ENU}$, $yE=xE^{ENU}$, $zD=-zU^{ENU}$.
+
+ENU → AER:
+
+$$\text{range}=\sqrt{xE^2+yN^2+zU^2},\qquad \text{az}=\operatorname{atan2}(xE,\,yN),\qquad \text{elev}=\operatorname{atan2}\left(zU,\sqrt{xE^2+yN^2}\right)$$
+
+Referencial local do robô $i$ (posição $\mathbf{p}i$, heading $\psii$ medido a partir do Norte no sentido horário): para um vizinho $j$ com posição $\mathbf{p}_j$ (em ENU),
+
+$$\mathbf{p}j^{(i)}=R(\psii)\,(\mathbf{p}j-\mathbf{p}i),\qquad R(\psi)=\begin{bmatrix}\cos\psi & -\sin\psi\\ \sin\psi & \cos\psi\end{bmatrix}$$
+
+com a convenção de eixos do robô (x à frente, y à esquerda) a definir e documentar explicitamente.
+
+1.5 Arquitetura modular prevista
+config.yaml ──► config_loader ──► data_loader ──► coordinates ──► frames
+                                                       │              │
+                                                       ▼              ▼
+                                                  global_view    local_view ──► replay
+                                                       └──────────┬────────────┘
+                                                                   ▼
+                                                          logger / exporter
+Módulo	Responsabilidade
+config_loader	Ler e validar o YAML
+data_loader	Ler trajetórias, validar, ordenar por tempo
+coordinates	Geodésico↔ECEF↔ENU/NED↔AER (matemática pura, testável)
+frames	Transformação para o referencial local de um robô
+views	Global View, Local View
+replay	Controlo temporal (slider, play/pause, salto)
+logger	Log e exportação da configuração/resultados
+1.6 Pressupostos e riscos
+Formato exato dos dados de entrada ainda por confirmar (será isolado no data_loader).
+Heading definido a partir do Norte, sentido horário (a validar com os dados).
+Frequências de amostragem diferentes entre robôs → necessidade de interpolação.
+Distâncias pequenas: ENU plano é uma boa aproximação, mas a cadeia via ECEF mantém rigor para distâncias maiores.
+
+Markdown [3]
+Copy
+2. Justificação da relevância das bibliotecas Python selecionadas
+De volta para "Conteúdo"
+
+Biblioteca	Utilização no projeto	Justificação
+NumPy	Operações vetoriais, matrizes de rotação, transformações em lote	Base numérica; permite transformar milhares de pontos sem ciclos em Python
+pandas	Leitura de CSV, agrupamento por robô, ordenação e interpolação temporal	Estruturas tabulares com índice temporal; groupby por robot_id; tratamento de dados em falta
+Matplotlib	Global View, Local View, animação (FuncAnimation) e widgets (Slider, Button)	Controlo total sobre os gráficos; slider e play/pause sem dependências extra; adequado a figuras para o relatório
+PyYAML	Leitura da configuração (yaml.safe_load)	Formato legível para o utilizador; safe_load evita execução de código arbitrário
+pymap3d	Validação das nossas conversões (geodetic2ecef, ecef2enu, enu2aer, ...)	Biblioteca de referência para os mesmos sistemas do enunciado; serve de "verdade" nos testes
+pyproj	Verificação cruzada independente do ECEF (WGS-84)	Segunda referência, baseada em PROJ, para reforçar a confiança nos resultados
+logging (stdlib)	Output log	Níveis, formatação e ficheiro de saída sem dependências
+argparse / pathlib (stdlib)	Interface de linha de comandos e caminhos	Usabilidade: python main.py --config config.yaml
+pytest	Testes unitários das transformações	Garante rigor e evita regressões
+dataclasses (stdlib)	Modelos Robot, Pose, Config	Código organizado e legível
+Decisão de projeto: as transformações de coordenadas são implementadas por nós com NumPy (para demonstrar domínio da matemática) e validadas contra pymap3d e pyproj. Bibliotecas de plotting interativo mais pesadas (Plotly, Dash) foram consideradas, mas não escolhidas: o Matplotlib cobre todos os requisitos com menos dependências.
+
+# Dependências previstas (requirements.txt)
+numpy
+pandas
+matplotlib
+pyyaml
+pymap3d
+pyproj
+pytest
+
+Code [4]
+python
+
+Copy
+# Verificação do ambiente
+import importlib
+for pkg in ["numpy", "pandas", "matplotlib", "yaml", "pymap3d", "pyproj"]:
+    try:
+        m = importlib.import_module(pkg)
+        print(f"{pkg:12s} OK  {getattr(m, '__version__', '')}")
+    except ImportError:
+        print(f"{pkg:12s} NÃO INSTALADO")
+
+Markdown [5]
+Copy
+3. Metodologia proposta para o desenvolvimento do projeto
+De volta para "Conteúdo"
+
+3.1 Fases e calendarização
+Fase	Semanas	Conteúdo	Entregável
+0. Planeamento	1–3	Análise do enunciado, escolha de bibliotecas, arquitetura	Entrega 1 (este notebook)
+1. Núcleo matemático	3–4	coordinates: geodésico↔ECEF↔ENU/NED↔AER + testes vs. pymap3d/pyproj	Módulo testado
+2. Dados e configuração	4–5	config_loader, data_loader, dados sintéticos de 3+ robôs	Pipeline de entrada
+3. Vistas	5–6	Global View e Local View (referencial local, heading, vizinhos)	Vistas estáticas
+4. Replay e log	6–7	Slider, play/pause, salto temporal; logging e exportação	Aplicação completa
+5. Consolidação	7–8	Testes finais, documentação, README, preparação da defesa	Entrega 2
+3.2 Abordagem de desenvolvimento
+Matemática primeiro, interface depois: o módulo coordinates é independente de qualquer visualização, o que permite testá-lo isoladamente.
+Dados sintéticos: geração de trajetórias conhecidas (círculo, linha reta, oito) com resposta analítica, para verificar visualmente e numericamente as transformações.
+Desenvolvimento incremental: cada funcionalidade (O1–O5) é fechada e testada antes da seguinte.
+Controlo de versões: repositório Git, ramos por funcionalidade, commits pequenos.
+3.3 Validação e testes
+Ida-e-volta: geodésico → ECEF → geodésico devolve o ponto original (erro < 1 mm).
+Comparação com referência: resultados de coordinates vs. pymap3d e pyproj num conjunto de pontos (tolerância numérica definida).
+Casos conhecidos: origem local → ENU = (0,0,0); ponto a 100 m a Norte → ENU = (0, 100, 0) e azimute 0°; ponto a Este → azimute 90°.
+Referencial local: robô com heading 90° e vizinho a Este deve aparecer "à frente" (segundo a convenção adotada).
+Testes unitários em pytest, executados antes de cada entrega.
+3.4 Estrutura do repositório
+multi_robot_viewer/
+├── config/config.yaml
+├── data/                 # trajetórias (reais e sintéticas)
+├── src/
+│   ├── config_loader.py
+│   ├── data_loader.py
+│   ├── coordinates.py
+│   ├── frames.py
+│   ├── views.py
+│   ├── replay.py
+│   └── logger.py
+├── tests/
+├── output/               # logs e exportações
+├── main.py
+├── requirements.txt
+└── README.md
+3.5 Exemplo de configuração YAML prevista
+origin:            # origem do referencial global
+  lat: 41.1780
+  lon: -8.6080
+  alt: 80.0
+frame: ENU         # ENU | NED
+robots:
+  - id: R1
+    file: data/robot1.csv
+    color: "#e6194b"
+  - id: R2
+    file: data/robot2.csv
+    color: "#3cb44b"
+selected_robot: R1
+neighbor_radius_m: 50.0
+replay:
+  step_s: 0.5
+  fps: 20
+output:
+  log_file: output/run.log
+  export_config: output/config_used.yaml
+  export_data: output/transformed.csv
+3.6 Divisão de tarefas
+Elemento	Responsabilidades principais
+Aluno 1	coordinates, frames, testes matemáticos, Local View
+Aluno 2	config_loader, data_loader, Global View, Replay, logging
+Ambos revêm o código um do outro e participam na integração, pois ambos são responsáveis por todo o trabalho e ambos defendem o projeto.
+
+3.7 Critérios de qualidade (Entrega 2)
+Código: PEP 8, docstrings, tipagem, módulos pequenos e coesos, README com instruções de execução.
+Usabilidade: execução por linha de comandos com ficheiro YAML, mensagens de erro claras, valores por omissão sensatos.
+Rigor: justificação das convenções (eixos, heading, unidades) e resultados validados por testes.
+Defesa: preparação para explicar cada transformação e a sua dedução matemática.

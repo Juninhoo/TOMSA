@@ -1,0 +1,123 @@
+Lab work 1 (~ week 3) 2.0/20
+• Objective identification and problem structuring 50 % 
+• Justification of the relevance of the selected Python libraries 30 %
+• Proposed methodology for project development 20 %
+
+Idea: Multi-Robot Trajectory Replay and Coordinate Frame VisualizerObjective: Develop a web dashboard in Python/Dash capable of replaying missions from
+ROS-like logs while visualizing robot trajectories in both global and local reference frames.
+
+I. Global View
+Display all robots in a common world frame, Plot trajectories, Current robot positions, Robot
+identification by color
+
+note que os frames não coincidem. Logo deve haver uma estratégia para suavisar esincronizar a data de forma a que seja possivel representar todos em sinultaneo
+
+2. Local View
+Select one robot, Display trajectory in its own local frame, Show heading/orientation, Show nearby
+robots transformed into the selected robot frame
+
+3. Mission Replay
+Time slider, Play/Pause animation, Jump to specific timestamps
+
+. YAML-Based Configuration
+5. Output Log / Output Configuration
+
+
+Earth-Centered Earth-Fixed Coordinates
+
+An Earth-centered Earth-fixed (ECEF) system uses the Cartesian coordinates (X,Y,Z) to represent positionrelative to the center of the reference ellipsoid. The distance between the center of the ellipsoid and thecenter of the Earth depends on the reference ellipsoid. • The positive X-axis intersects the surface of the ellipsoid at 0° latitude and 0° longitude, where theequator meets the prime meridian. • The positive Y-axis intersects the surface of the ellipsoid at 0° latitude and 90° longitude. • The positive Z-axis intersects the surface of the ellipsoid at 90° latitude and 0° longitude, the North Pole.
+
+North-East-Down Coordinates
+
+A north-east-down (NED) system uses the Cartesian coordinates (xNorth,yEast,zDown) to represent positionrelative to a local origin. The local origin is described by the geodetic coordinates (lat0,lon0,h0).
+Typically, the local origin of an NED system is above the surface of the Earth. • The positive xNorth-axis points north along the meridian of longitude containing lon0. • The positive yEast-axis points east along the parallel of latitude containing lat0. • The positive zDown-axis points downward along the ellipsoid normal.
+
+Azimuth-Elevation-Range Coordinates
+
+An azimuth-elevation-range (AER) system uses the spherical coordinates (az,elev,range) to represent positionrelative to a local origin. The local origin is described by the geodetic coordinates (lat0,lon0,h0). Azimuth,
+elevation, and slant range are dependent on a local Cartesian system, for example, an ENU system. • az, the azimuth, is the clockwise angle in the xEast-yNorth plane from the positive yNorth-axis to theprojection of the object into the plane. • elev, the elevation, is the angle from the xEast-yNorth plane to the object. • range, the slant range, is the Euclidean distance between the object and the local origin
+
+Lab work 1 (~ week 3) • Objective identification and problem structuring
+• Justification of the relevance of the selected Python libraries • Proposed methodology for project development
+
+Computer Language • Python
+
+File name
+TOMSA_TL1_GRUPOXX (3).ipynb
+File size
+3.2 KB
+Format version
+4.5
+Kernel
+python3
+Display name
+Python 3 (ipykernel)
+Language
+python
+Language version
+3.13.13
+Highlight
+python
+Total cells
+8
+Markdown cells
+6
+Code cells
+2
+Raw cells
+0
+Cells with outputs
+0
+Total saved outputs
+0
+Cells with errors
+0
+Embedded images
+0
+Processing time
+3ms
+
+Markdown [1]
+Copy
+
+TÓPICOS DE MATEMÁTICA PARA SISTEMA AUTÓNOMOS
+TRABALHO LETIVO - ENTREGA 1
+
+Nota 1: Todos elementos do grupo são responsáveis por esta entrega
+Nota 2: Todos elementos do grupo tomaram conhecimento das regras estabelecidas para o funcionamento da u.c. no Moodle do ISEP
+
+
+Markdown [2]
+Copy
+GRUPO 11
+N: 1131518 Geovani Lopes Nome: Aluno1 \ N: XXXXXXXX Nome: Hugo
+
+Markdown [3]
+Copy
+Conteúdo
+1. Identificação dos objetivos e estruturação do problema
+2. Justificação da relevância das bibliotecas Python selecionadas
+3. Metodologia proposta para o desenvolvimento do projeto
+
+Markdown [4]
+Copy
+1. Identificação dos objetivos e estruturação do problema
+De volta para "Conteúdo"
+
+
+Markdown [5]
+Copy
+2. Justificação da relevância das bibliotecas Python selecionadas
+De volta para "Conteúdo"
+
+
+Markdown [6]
+Copy
+3. Metodologia proposta para o desenvolvimento do projeto
+De volta para "Conteúdo"
+
+
+Code [7]
+python
+
+Copy

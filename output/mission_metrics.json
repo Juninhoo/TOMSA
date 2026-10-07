@@ -1,0 +1,95 @@
+{
+  "mission": {
+    "origin": {
+      "latitude": 41.45201666666667,
+      "longitude": -8.81322222222222,
+      "altitude": 55.44791126176966
+    },
+    "num_robots": 3,
+    "common_overlap_duration_s": 2396.2713899612427,
+    "common_start_timestamp": 1760097600.23955,
+    "common_end_timestamp": 1760099996.51094
+  },
+  "robots": {
+    "Robot 1": {
+      "label": "ASV Alpha (Robot 1)",
+      "total_points": 9537,
+      "duration_s": 5089.787708520889,
+      "total_distance_m": 2027.05,
+      "mean_speed_ms": 0.408,
+      "max_speed_ms": 0.901,
+      "start_coords_deg": [
+        41.45243668417263,
+        -8.812361269432273,
+        56.73275840096176
+      ],
+      "end_coords_deg": [
+        41.45363576308244,
+        -8.812501925703131,
+        56.72237171418965
+      ]
+    },
+    "Robot 4": {
+      "label": "ASV Bravo (Robot 4)",
+      "total_points": 5615,
+      "duration_s": 2995.315693616867,
+      "total_distance_m": 1334.56,
+      "mean_speed_ms": 0.469,
+      "max_speed_ms": 1.078,
+      "start_coords_deg": [
+        41.45312396891799,
+        -8.812046988513682,
+        56.90558770019561
+      ],
+      "end_coords_deg": [
+        41.45258537197688,
+        -8.811779714582068,
+        56.84689806587994
+      ]
+    },
+    "Robot 7": {
+      "label": "ASV Charlie (Robot 7)",
+      "total_points": 15000,
+      "duration_s": 8012.670069932938,
+      "total_distance_m": 1004.73,
+      "mean_speed_ms": 0.131,
+      "max_speed_ms": 1.098,
+      "start_coords_deg": [
+        41.452505835231946,
+        -8.813647533776777,
+        56.038964939303696
+      ],
+      "end_coords_deg": [
+        41.45263878270947,
+        -8.81386722696546,
+        55.02350555732846
+      ]
+    }
+  },
+  "inter_robot_proximity": [
+    {
+      "robot_a": "Robot 1",
+      "robot_b": "Robot 4",
+      "closest_point_of_approach_m": 27.66,
+      "cpa_relative_time_s": 1450.0,
+      "cpa_timestamp": 1760099050.24,
+      "mean_separation_m": 75.15
+    },
+    {
+      "robot_a": "Robot 1",
+      "robot_b": "Robot 7",
+      "closest_point_of_approach_m": 174.95,
+      "cpa_relative_time_s": 442.0,
+      "cpa_timestamp": 1760098042.24,
+      "mean_separation_m": 265.29
+    },
+    {
+      "robot_a": "Robot 4",
+      "robot_b": "Robot 7",
+      "closest_point_of_approach_m": 206.69,
+      "cpa_relative_time_s": 394.0,
+      "cpa_timestamp": 1760097994.24,
+      "mean_separation_m": 290.99
+    }
+  ]
+}

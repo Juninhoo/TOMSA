@@ -1,0 +1,14 @@
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Método de Interpolação} & \textbf{Continuidade} & \textbf{RMSE Médio (m)} & \textbf{Desvio Máximo (m)} & \textbf{Tempo (ms)} \\
+\midrule
+Kalman + RTS & C1 Estocástica (Ótima) & 0.1738 & 5.2410 & 225.19 \\
+Linear & C0 & 0.1460 & 4.9258 & 0.36 \\
+Spline Cúbica & C2 & 0.1236 & 4.3452 & 5.18 \\
+\bottomrule
+\end{tabular}
+\caption{Resultados quantitativos do benchmark de interpoladores nos dados da Aguçadoura.}
+\end{table}
