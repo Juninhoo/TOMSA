@@ -30,7 +30,8 @@ from multi_robot_system.visualization.plotly_views import (
     create_global_3d_figure,
     create_pov_camera_figure,
     create_proximity_timeline_figure,
-    get_scene_geometry
+    get_scene_geometry,
+    BODY_AXIS_LENGTH_M
 )
 from multi_robot_system.visualization.cockpit_view import create_cockpit_figure
 
@@ -92,6 +93,7 @@ class MissionWebDashboard:
             "t_max": max_t,
             "num_steps": len(t_arr),
             "scene": get_scene_geometry(self.dataset),
+            "axis_length_m": BODY_AXIS_LENGTH_M,   # comprimento das setas x, y, z do corpo [m]
             "robots": {}
         }
 
@@ -279,7 +281,8 @@ class MissionWebDashboard:
             <kbd>Espaço</kbd>: Play / Pausa
         </div>
         <div>
-            Limiar de Alarme de Colisão: <b>&lt; 10 metros</b> | Filtro: <b>RTS Smoother Ativo</b>
+            Eixos do corpo: <b style="color:#ff3b3b">x proa</b> | <b style="color:#2ee66b">y estibordo</b> | <b style="color:#3b8bff">z quilha</b>
+            &nbsp;|&nbsp; Limiar de Alarme de Colisão: <b>&lt; 10 metros</b> | Filtro: <b>RTS Smoother Ativo</b>
         </div>
     </div>
 
@@ -362,6 +365,20 @@ class MissionWebDashboard:
             };
         }
 
+        // Eixos do corpo (x proa, y estibordo, z quilha) escritos no mundo NED = colunas de R = Rz(yaw) Ry(pitch) Rx(roll).
+        // Devolve 3 vetores [N, E, D]; é a mesma matriz que toBody() usa transposta.
+        function bodyAxesNED(s) {
+            const psi = s.yaw * DEG, the = s.pitch * DEG, phi = s.roll * DEG;
+            const cPsi = Math.cos(psi), sPsi = Math.sin(psi);
+            const cThe = Math.cos(the), sThe = Math.sin(the);
+            const cPhi = Math.cos(phi), sPhi = Math.sin(phi);
+            return [
+                [cThe * cPsi, cThe * sPsi, -sThe],
+                [sPhi * sThe * cPsi - cPhi * sPsi, sPhi * sThe * sPsi + cPhi * cPsi, sPhi * cThe],
+                [cPhi * sThe * cPsi + sPhi * sPsi, cPhi * sThe * sPsi - sPhi * cPsi, cPhi * cThe]
+            ];
+        }
+
         // ---------- Cena 3D (Vista Global e Vista POV partilham o mesmo código) ----------
         const lastKeys = {};
         let frameCount = 0;
@@ -374,6 +391,7 @@ class MissionWebDashboard:
             const i0 = Math.floor(f);
             const flags = [];
             const mkIdx = [], mkOpacity = [], mkText = [], wfOpacity = [], wfIdx = [];
+            const axisBase = 2 + 4 * robotKeys.length;      // as setas dos eixos vêm depois das rotas completas
 
             robotKeys.forEach((id, i) => {
                 const r = timeline.robots[id];
@@ -392,6 +410,16 @@ class MissionWebDashboard:
                 idx.push(3 + 3 * i); X.push([s.E]); Y.push([s.N]); Z.push([s.D]);
                 const g = computeSubmarineWireframe(s.E, s.N, s.D, s.yaw, s.pitch, hull);
                 idx.push(4 + 3 * i); X.push(g.x); Y.push(g.y); Z.push(g.z);
+
+                // Eixos x, y, z colados ao robô: rodam com roll, pitch e yaw
+                const axes = bodyAxesNED(s), L = timeline.axis_length_m * hull;
+                for (let a = 0; a < 3; a++) {
+                    idx.push(axisBase + 3 * i + a);
+                    X.push([s.E, s.E + L * axes[a][1]]);
+                    Y.push([s.N, s.N + L * axes[a][0]]);
+                    Z.push([s.D, s.D + L * axes[a][2]]);
+                    wfIdx.push(axisBase + 3 * i + a); wfOpacity.push(self ? 0.0 : (act ? 1.0 : 0.25));
+                }
 
                 mkIdx.push(3 + 3 * i); mkOpacity.push(self ? 0.0 : (act ? 1.0 : 0.25));
                 mkText.push([self ? '' : (act ? ('<b>' + id + '</b><br>' + s.spd.toFixed(1) + ' m/s') : ('<b>' + id + '</b><br>inativo'))]);

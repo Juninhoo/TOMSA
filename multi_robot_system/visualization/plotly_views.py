@@ -12,6 +12,7 @@ import plotly.graph_objects as go
 
 from multi_robot_system.core.data.trajectory import MissionDataset
 from multi_robot_system.core.math.proximity import CPAResult
+from multi_robot_system.core.math.rotations import euler_zyx_to_rotation_matrix
 
 
 # -----------------------------------------------------------------------------
@@ -99,6 +100,34 @@ def compute_submarine_wireframe(
     return pts[:, 0].tolist(), pts[:, 1].tolist(), pts[:, 2].tolist()
 
 
+# Eixos do referencial do corpo (Body Frame): x = proa (frente), y = estibordo (direita), z = quilha (baixo).
+# Convenção de cores habitual em robótica: x vermelho, y verde, z azul.
+BODY_AXIS_NAMES = ("x", "y", "z")
+BODY_AXIS_COLORS = ("#ff3b3b", "#2ee66b", "#3b8bff")
+BODY_AXIS_LENGTH_M = 10.0
+
+
+def compute_body_axes(
+    e: float, n: float, d: float,
+    roll_deg: float, pitch_deg: float, yaw_deg: float,
+    length: float = BODY_AXIS_LENGTH_M
+) -> List[Tuple[List[float], List[float], List[float]]]:
+    """Calcula as 3 setas (x, y, z) do referencial do corpo, coladas ao robô e rodadas com a sua atitude.
+
+    Cada coluna da matriz de rotação R = Rz(yaw) Ry(pitch) Rx(roll) é um eixo do corpo escrito no
+    referencial NED. Devolve, para cada eixo, as listas (E, N, D) do ponto de origem (centro do robô)
+    e do ponto da ponta da seta, prontas para o Scatter3d (x = Este, y = Norte, z = Profundidade).
+    """
+    r, p, y = np.radians(roll_deg), np.radians(pitch_deg), np.radians(yaw_deg)
+    R = euler_zyx_to_rotation_matrix(r, p, y)
+    origin = np.array([n, e, d])  # ordem NED
+    axes = []
+    for k in range(3):
+        tip = origin + length * R[:, k]
+        axes.append(([e, float(tip[1])], [n, float(tip[0])], [d, float(tip[2])]))
+    return axes
+
+
 def get_scene_geometry(dataset: MissionDataset, seabed_margin_m: float = 5.0, top_margin_m: float = 3.0) -> dict:
     """Caixa 3D partilhada pela Vista Global e pela Vista POV (eixos fixos, escala métrica 1:1).
 
@@ -137,6 +166,10 @@ def create_global_3d_figure(
           2 + 3*i: Linha de Rasto (Progressivo)
           3 + 3*i: Marcador de Posição
           4 + 3*i: Casco 3D do Submarino (Modelo Tridimensional Completo)
+      - 2 + 3*N + i: Rota completa de cada robô (fantasma ténue)
+      - 2 + 4*N + 3*i + a: Seta do eixo a (0 = x proa, 1 = y estibordo, 2 = z quilha) do robô i,
+        colada ao robô e rodada com a sua atitude (roll, pitch, yaw)
+    (N = número de robôs. A ordem é usada pelo JavaScript do dashboard em web_server.py.)
     """
     fig = go.Figure()
 
@@ -153,6 +186,7 @@ def create_global_3d_figure(
 
     # Trajetórias progressivas de cada robô em ordem estritamente determinística
     sorted_robots = sorted(dataset.trajectories.keys())
+    body_pose = {}  # posição e atitude de cada robô, para desenhar os eixos x, y, z no fim
     for r_id in sorted_robots:
         traj = dataset.trajectories[r_id]
         # Filtra pontos até ao tempo atual (rasto progressivo conforme Q9)
@@ -179,16 +213,20 @@ def create_global_3d_figure(
         if r_id in current_states:
             st = current_states[r_id]
             curr_n, curr_e, curr_d = float(st["pos_ned"][0]), float(st["pos_ned"][1]), float(st["pos_ned"][2])
+            roll_deg = float(st["euler_deg"][0])
             yaw_deg = float(st["euler_deg"][2])
             pitch_deg = float(st["euler_deg"][1])
             spd = float(st["speed_longitudinal"])
             lbl = st["label"]
         else:
             curr_n, curr_e, curr_d = float(traj.pos_ned[0, 0]), float(traj.pos_ned[1, 0]), float(traj.pos_ned[2, 0])
+            roll_deg = float(traj.euler_deg[0, 0])
             yaw_deg = float(traj.euler_deg[0, 2])
             pitch_deg = float(traj.euler_deg[0, 1])
             spd = 0.0
             lbl = traj.label
+
+        body_pose[r_id] = (curr_e, curr_n, curr_d, roll_deg, pitch_deg, yaw_deg)
 
         is_sel = (r_id == selected_robot_id)
         marker_size = 8 if is_sel else 6
@@ -216,7 +254,6 @@ def create_global_3d_figure(
         ))
 
     # Rota completa de cada robô (fantasma ténue) - traces 2 + 3*N + i. O rasto brilhante revela-se por cima.
-    n_rob = len(sorted_robots)
     for r_id in sorted_robots:
         traj = dataset.trajectories[r_id]
         step = max(1, traj.pos_ned.shape[1] // 1500)
@@ -225,6 +262,23 @@ def create_global_3d_figure(
             mode="lines", name=f"{r_id} (Rota completa)", showlegend=False, hoverinfo="skip",
             opacity=0.22, line=dict(color=traj.color, width=2)
         ))
+
+    # Eixos x, y, z do corpo de cada robô (traces 2 + 4*N + 3*i + a): a origem fica no centro do robô e as
+    # setas rodam com ele. A letra do eixo aparece na ponta da seta.
+    for r_id in sorted_robots:
+        e0, n0, d0, roll0, pitch0, yaw0 = body_pose[r_id]
+        for a, (ax_x, ax_y, ax_z) in enumerate(compute_body_axes(e0, n0, d0, roll0, pitch0, yaw0)):
+            fig.add_trace(go.Scatter3d(
+                x=ax_x, y=ax_y, z=ax_z,
+                mode="lines+text",
+                name=f"{r_id} (eixo {BODY_AXIS_NAMES[a]})",
+                showlegend=False,
+                hoverinfo="skip",
+                text=["", f"<b>{BODY_AXIS_NAMES[a]}</b>"],
+                textposition="top center",
+                textfont=dict(color=BODY_AXIS_COLORS[a], size=13),
+                line=dict(color=BODY_AXIS_COLORS[a], width=7)
+            ))
 
     # Layout Dark Mode com Profundidade Invertida (autoranging reversed em Z para maior profundidade = mais em baixo)
     fig.update_layout(
