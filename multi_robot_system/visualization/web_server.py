@@ -7,6 +7,7 @@ Implementa a interface gráfica central do sistema com:
    - '1', '2', '3': Seleciona o robô ativo.
    - 'v': Alterna ciclicamente entre as 3 vistas.
    - 'r': Reinicia a reprodução das trajetórias (reset ao início).
+   - 'f': Liga ou desliga a câmara que segue o robô ativo (Vista Global); 'g': volta à Vista Geral.
    - Espaço: Play / Pausa.
 4. Geração de bundle HTML 100% autónomo (offline).
 """
@@ -87,6 +88,11 @@ class MissionWebDashboard:
         def _unwrap_deg(a):
             return np.degrees(np.unwrap(np.radians(a)))
 
+        # Limiares do aviso de proximidade: perigo de colisão (vermelho) e aviso de aproximação (amarelo) [m]
+        spatial_cfg = self.config.get("spatial", {})
+        danger_m = float(spatial_cfg.get("collision_threshold_m", 10.0))
+        warning_m = max(danger_m, float(spatial_cfg.get("proximity_warning_m", 30.0)))
+
         timeline_dict = {
             "dt_step": dt_sample,
             "t0_base": min_t,
@@ -94,6 +100,8 @@ class MissionWebDashboard:
             "num_steps": len(t_arr),
             "scene": get_scene_geometry(self.dataset),
             "axis_length_m": BODY_AXIS_LENGTH_M,   # comprimento das setas x, y, z do corpo [m]
+            "collision_threshold_m": danger_m,     # abaixo disto: PERIGO DE COLISÃO (vermelho)
+            "proximity_warning_m": warning_m,      # abaixo disto: ATENÇÃO, robots próximos (amarelo)
             "robots": {}
         }
 
@@ -204,6 +212,34 @@ class MissionWebDashboard:
             display: flex;
             justify-content: space-between;
         }
+        .main-container { position: relative; }
+        #proximity-banner {
+            position: absolute;
+            top: 28px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 50;
+            display: none;
+            padding: 10px 24px;
+            border-radius: 8px;
+            text-align: center;
+            font-size: 14px;
+            pointer-events: none;
+            box-shadow: 0 4px 18px rgba(0, 0, 0, 0.55);
+        }
+        #proximity-banner .title { font-size: 20px; font-weight: 800; letter-spacing: 1px; margin-bottom: 2px; }
+        #proximity-banner.danger {
+            background: rgba(230, 57, 70, 0.94);
+            color: #ffffff;
+            border: 2px solid #ffb3b8;
+            animation: proximity-pulse 0.8s ease-in-out infinite alternate;
+        }
+        #proximity-banner.warning {
+            background: rgba(244, 162, 97, 0.94);
+            color: #1b1b1b;
+            border: 2px solid #ffd9b3;
+        }
+        @keyframes proximity-pulse { from { opacity: 1; } to { opacity: 0.55; } }
         kbd {
             background: #374151;
             padding: 2px 6px;
@@ -238,6 +274,8 @@ class MissionWebDashboard:
     <div class="controls-bar">
         <button id="btn-play" onclick="togglePlay()">&#9654; Play</button>
         <button id="btn-reset" class="danger" onclick="resetTrajectory()">&#8634; Reiniciar (R)</button>
+        <button id="btn-follow" onclick="toggleFollow()" title="A câmara da Vista Global segue o robô selecionado">&#9737; Seguir (F)</button>
+        <button id="btn-overview" onclick="overviewCamera()" title="Volta à vista de cima com os 3 robôs">&#9635; Vista geral (G)</button>
         
         <div class="slider-box">
             <span style="font-size: 12px; color: #9ca3af;">Tempo:</span>
@@ -258,6 +296,7 @@ class MissionWebDashboard:
     </div>
 
     <div class="main-container">
+        <div id="proximity-banner"></div>
         <div id="panel-global" class="view-panel active">
             __DIV_GLOBAL__
         </div>
@@ -278,6 +317,8 @@ class MissionWebDashboard:
             <kbd>1</kbd>, <kbd>2</kbd>, <kbd>3</kbd>: Selecionar Submarino |
             <kbd>V</kbd>: Alternar Vista |
             <kbd>R</kbd>: Reiniciar Trajetória |
+            <kbd>F</kbd>: Seguir Robô |
+            <kbd>G</kbd>: Vista Geral |
             <kbd>Espaço</kbd>: Play / Pausa
         </div>
         <div>
@@ -435,6 +476,59 @@ class MissionWebDashboard:
             }
 
             if (pov) setFirstPersonCamera(gd, f);
+            else if (followOn) followCamera(gd, f);
+        }
+
+        // Câmara que segue o robô ativo na Vista Global.
+        // O centro da câmara fica no robô (a cada instante) e o olho mantém o afastamento (eye - center) que o
+        // utilizador escolheu com o rato (rodar e zoom). Coordenadas da câmara = (E - cE, N - cN, -(D - cD)) / span.
+        const FOLLOW_DIST_M = 45.0;                  // afastamento inicial ao robô [m]
+        const FOLLOW_DIR = [-0.62, -0.62, 0.48];     // direção do olho: sudoeste e acima (E, N, para cima)
+        let followOn = false;
+        let followCamSet = false;                    // já aplicámos a câmara de seguimento nesta sessão de seguimento?
+        let camOffset = null;                        // eye - center, em unidades da câmara do Plotly
+
+        function defaultFollowOffset() {
+            const k = FOLLOW_DIST_M / timeline.scene.span;
+            return { x: FOLLOW_DIR[0] * k, y: FOLLOW_DIR[1] * k, z: FOLLOW_DIR[2] * k };
+        }
+
+        function followCamera(gd, f) {
+            const r = timeline.robots[currentRobot];
+            if (!r) return;
+            const s = stateAt(r, f), G = timeline.scene, k = 1.0 / G.span;
+            if (camOffset === null) camOffset = defaultFollowOffset();
+            if (followCamSet) {
+                // Se o utilizador rodou ou fez zoom desde a última imagem, guarda o novo afastamento
+                try {
+                    const live = gd._fullLayout.scene._scene.getCamera();
+                    camOffset = { x: live.eye.x - live.center.x, y: live.eye.y - live.center.y, z: live.eye.z - live.center.z };
+                } catch (err) { /* sem acesso à câmara atual: mantém o último afastamento */ }
+            }
+            const center = { x: (s.E - G.cE) * k, y: (s.N - G.cN) * k, z: -(s.D - G.cD) * k };
+            const eye = { x: center.x + camOffset.x, y: center.y + camOffset.y, z: center.z + camOffset.z };
+            Plotly.relayout(gd, { 'scene.camera': { eye: eye, center: center, up: { x: 0, y: 0, z: 1 }, projection: { type: 'perspective' } } });
+            followCamSet = true;
+        }
+
+        function setFollow(on) {
+            followOn = on;
+            followCamSet = false;
+            document.getElementById('btn-follow').classList.toggle('active', on);
+        }
+
+        function toggleFollow() {
+            setFollow(!followOn);
+            updateFrame(curF());
+        }
+
+        // Volta à vista de cima com os 3 robôs (câmara por omissão do Plotly)
+        function overviewCamera() {
+            setFollow(false);
+            const gd = document.getElementById('plot-global');
+            if (gd && gd.data) {
+                Plotly.relayout(gd, { 'scene.camera': { eye: { x: 1.25, y: 1.25, z: 1.25 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 }, projection: { type: 'perspective' } } });
+            }
         }
 
         // Câmara em 1ª pessoa: olho no nariz do robô ativo, a olhar para a proa, com o 'up' do corpo.
@@ -519,7 +613,32 @@ class MissionWebDashboard:
             Plotly.relayout(gd, { 'shapes[1].x0': tRel, 'shapes[1].x1': tRel });
         }
 
+        // ---------- Aviso de proximidade (Vista Global e Vista 1ª Pessoa) ----------
+        // Amarelo: dois robôs ativos a menos de proximity_warning_m. Vermelho a piscar: menos de collision_threshold_m.
+        function updateProximityBanner(f) {
+            const box = document.getElementById('proximity-banner');
+            if (!box) return;
+            if (currentView !== 'global' && currentView !== 'pov') { box.style.display = 'none'; return; }
+            const act = robotKeys.filter(id => isActive(timeline.robots[id], f));
+            const near = [];
+            for (let i = 0; i < act.length; i++) {
+                for (let j = i + 1; j < act.length; j++) {
+                    const a = stateAt(timeline.robots[act[i]], f), b = stateAt(timeline.robots[act[j]], f);
+                    const d = Math.sqrt((a.N - b.N) * (a.N - b.N) + (a.E - b.E) * (a.E - b.E) + (a.D - b.D) * (a.D - b.D));
+                    if (d < timeline.proximity_warning_m) near.push({ a: act[i], b: act[j], d: d });
+                }
+            }
+            if (near.length === 0) { box.style.display = 'none'; return; }
+            near.sort((p, q) => p.d - q.d);
+            const danger = near[0].d < timeline.collision_threshold_m;
+            box.className = danger ? 'danger' : 'warning';
+            box.innerHTML = '<div class="title">&#9888; ' + (danger ? 'PERIGO DE COLISÃO' : 'ATENÇÃO: ROBOTS PRÓXIMOS') + '</div>' +
+                near.map(p => '<div>' + p.a + ' e ' + p.b + ': <b>' + p.d.toFixed(1) + ' m</b></div>').join('');
+            box.style.display = 'block';
+        }
+
         function updateFrame(f) {
+            updateProximityBanner(f);
             if (currentView === 'global') updateScene('plot-global', f, false);
             else if (currentView === 'pov') updateScene('plot-pov', f, true);
             else if (currentView === 'cockpit') updateCockpitView(f);
@@ -545,6 +664,7 @@ class MissionWebDashboard:
 
         function setRobot(robotId) {
             currentRobot = robotId;
+            if (!followOn) setFollow(true);      // ao escolher um robô, a câmara da Vista Global vai ter com ele e segue-o
             document.getElementById('btn-r1').classList.toggle('active', robotId === 'Robot 1');
             document.getElementById('btn-r4').classList.toggle('active', robotId === 'Robot 4');
             document.getElementById('btn-r7').classList.toggle('active', robotId === 'Robot 7');
@@ -625,6 +745,8 @@ class MissionWebDashboard:
                 else setView('global');
             }
             if (e.key.toLowerCase() === 'r') resetTrajectory();
+            if (e.key.toLowerCase() === 'f') toggleFollow();
+            if (e.key.toLowerCase() === 'g') overviewCamera();
             if (e.key === ' ') { e.preventDefault(); togglePlay(); }
         });
 
