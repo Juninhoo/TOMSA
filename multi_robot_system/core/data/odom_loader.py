@@ -59,6 +59,52 @@ def parse_covariance_diagonal(cov_series: pd.Series) -> np.ndarray:
     return np.array(stds, dtype=float)
 
 
+def parse_declared_horizontal_sigma(cov_series: pd.Series) -> np.ndarray:
+    """Incerteza horizontal declarada [m] = raiz de (var_x + var_y), tal como vem em pose.covariance (sem mínimos)."""
+    out = np.zeros(len(cov_series))
+    for k, entry in enumerate(cov_series):
+        if not isinstance(entry, str):
+            continue
+        parts = entry.strip("() \n\r\t").split(",")
+        try:
+            out[k] = float(np.sqrt(max(0.0, float(parts[0])) + max(0.0, float(parts[7]))))
+        except (IndexError, ValueError):
+            pass
+    return out
+
+
+def detect_position_jumps(timestamps: np.ndarray, pos_ned_raw: np.ndarray,
+                          max_speed_m_s: float = 2.5, group_s: float = 5.0) -> List[Dict]:
+    """Saltos de posição no registo bruto: velocidade implícita acima de max_speed_m_s (estes robots andam a menos de 1 m/s).
+
+    Amostras seguidas a menos de group_s segundos contam como um só evento. m = distância total saltada [m].
+    """
+    t = np.asarray(timestamps, dtype=float)
+    if len(t) < 3:
+        return []
+    dt = np.diff(t)
+    step = np.linalg.norm(np.diff(pos_ned_raw, axis=1), axis=0)
+    ok = dt > 1e-6
+    idx = np.where(ok & (step / np.where(ok, dt, 1.0) > max_speed_m_s))[0]
+    groups, cur = [], []
+    for j in idx:
+        if cur and t[j] - t[cur[-1]] > group_s:
+            groups.append(cur)
+            cur = []
+        cur.append(j)
+    if cur:
+        groups.append(cur)
+    events = []
+    for g in groups:
+        j0, j1 = g[0], g[-1] + 1
+        events.append({
+            "t": float(t[j0]),
+            "m": float(np.linalg.norm(pos_ned_raw[:, j1] - pos_ned_raw[:, j0])),
+            "depth_m": float(pos_ned_raw[2, j0]),
+        })
+    return events
+
+
 def compute_reference_origin(file_paths: List[str]) -> Tuple[float, float, float]:
     """Origem local calculada a partir dos dados, igual à do visualizador de referência (trajectories/).
 
@@ -146,6 +192,20 @@ def load_single_robot_csv(
         vel_ned_smooth = np.gradient(pos_ned_raw, dt_v, axis=1)
         cov_diag_smooth = np.zeros((len(timestamps), 6))
 
+    # Velocidade linear medida pelo próprio robot (twist, referencial do corpo: u proa, v estibordo, w para baixo)
+    twist_cols = ["twist.twist.linear.x", "twist.twist.linear.y", "twist.twist.linear.z"]
+    if all(c in df.columns for c in twist_cols):
+        vel_body_meas = df[twist_cols].values.astype(float).T
+    else:
+        vel_body_meas = np.zeros((3, len(timestamps)))
+
+    # Incerteza horizontal declarada no registo e saltos de posição do registo bruto (para o Cockpit)
+    if "pose.covariance" in df.columns:
+        sigma_h_decl = parse_declared_horizontal_sigma(df["pose.covariance"])
+    else:
+        sigma_h_decl = np.zeros(len(timestamps))
+    jump_events = detect_position_jumps(timestamps, pos_ned_raw)
+
     # Velocidade linear longitudinal e velocidade angular de viragem (Q28)
     v_long = compute_longitudinal_speed(vel_ned_smooth, yaw_deg)
     yaw_rate = compute_turn_rate(yaw_deg, timestamps)
@@ -166,5 +226,8 @@ def load_single_robot_csv(
         "vel_ned": vel_ned_smooth,
         "speed_longitudinal": v_long,
         "turn_rate_yaw": yaw_rate,
-        "cov_diag": cov_diag_smooth
+        "cov_diag": cov_diag_smooth,
+        "vel_body_meas": vel_body_meas,
+        "sigma_h_decl": sigma_h_decl,
+        "jump_events": jump_events
     }

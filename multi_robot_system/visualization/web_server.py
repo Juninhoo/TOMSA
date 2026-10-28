@@ -62,19 +62,14 @@ class MissionWebDashboard:
     def build_dashboard_html(self, standalone_t: Optional[float] = None) -> str:
         """Gera a página HTML completa com componentes visuais do Plotly e animação 60 FPS no browser."""
         t_eval = standalone_t if standalone_t is not None else self.current_t
-        states = self.dataset.get_state_at_time(t_eval)
-        cpa_results = self.dataset.evaluate_cpa_at_time(t_eval, collision_threshold_m=10.0)
-
         # Gera as 4 figuras Plotly com IDs estáticos garantidos
         fig_global = create_global_3d_figure(self.dataset, t_eval, self.active_robot)
         fig_pov = create_pov_camera_figure(self.dataset, t_eval, self.active_robot)
-        active_st = states.get(self.active_robot, list(states.values())[0])
-        fig_cockpit = create_cockpit_figure(active_st, cpa_results, t_eval - self.dataset.t0_mission)
         fig_prox = create_proximity_timeline_figure(self.dataset, t_eval, collision_threshold_m=10.0)
 
         div_global = pio.to_html(fig_global, div_id="plot-global", full_html=False, include_plotlyjs="cdn")
         div_pov = pio.to_html(fig_pov, div_id="plot-pov", full_html=False, include_plotlyjs=False)
-        div_cockpit = pio.to_html(fig_cockpit, div_id="plot-cockpit", full_html=False, include_plotlyjs=False)
+        div_cockpit = '<div id="cockpit-root"></div>'   # o Cockpit é desenhado no browser (SVG), sem figura Plotly
         div_prox = pio.to_html(fig_prox, div_id="plot-prox", full_html=False, include_plotlyjs=False)
 
         min_t = float(self.t_start)
@@ -109,6 +104,8 @@ class MissionWebDashboard:
             traj = self.dataset.trajectories[r_id]
             ts = traj.timestamps
             f = lambda y: np.interp(t_arr, ts, y)  # fora do intervalo do robô mantém a 1ª/última posição
+            vb = traj.vel_body_meas if traj.vel_body_meas is not None else np.zeros((3, len(ts)))
+            sig = traj.sigma_h_decl if traj.sigma_h_decl is not None else np.zeros(len(ts))
             timeline_dict["robots"][r_id] = {
                 "label": traj.label,
                 "color": traj.color,
@@ -123,6 +120,17 @@ class MissionWebDashboard:
                 "yaw": f(_unwrap_deg(traj.euler_deg[:, 2])).round(2).tolist(),
                 "spd": f(traj.speed_longitudinal).round(2).tolist(),
                 "turn": f(traj.turn_rate_yaw).round(2).tolist(),
+                # Cockpit: velocidade estimada em NED, velocidade medida no corpo (twist) e incerteza declarada
+                "vN": f(traj.vel_ned[0]).round(3).tolist(),
+                "vE": f(traj.vel_ned[1]).round(3).tolist(),
+                "vD": f(traj.vel_ned[2]).round(3).tolist(),
+                "u": f(np.nan_to_num(vb[0])).round(3).tolist(),
+                "v": f(np.nan_to_num(vb[1])).round(3).tolist(),
+                "w": f(np.nan_to_num(vb[2])).round(3).tolist(),
+                "sig": f(sig).round(4).tolist(),
+                # saltos de posição do registo bruto: instante desde o início da missão [s], tamanho [m], se estava imerso
+                "jumps": [{"t": round(float(e["t"] - min_t), 1), "m": round(float(e["m"]), 1), "sub": bool(e["depth_m"] > 3.0)}
+                          for e in (traj.jump_events or [])],
             }
         timeline_json = json.dumps(timeline_dict)
 
@@ -175,6 +183,25 @@ class MissionWebDashboard:
             gap: 20px;
         }
         .slider-box { flex: 1; display: flex; align-items: center; gap: 12px; }
+        .slider-track-wrap { position: relative; flex: 1; display: flex; align-items: center; }
+        .slider-track-wrap input[type=range] { width: 100%; }
+        /* Marcas de proximidade por baixo da barra do tempo (--c = posição do centro, --w = largura, de 0 a 1) */
+        #prox-marks { position: absolute; left: 0; right: 0; top: 0; bottom: 0; pointer-events: none; }
+        .prox-mark {
+            position: absolute;
+            top: calc(50% + 11px);
+            left: calc(10px + (100% - 20px) * var(--c));
+            width: calc((100% - 20px) * var(--w));
+            min-width: 8px;
+            height: 9px;
+            transform: translateX(-50%);
+            border-radius: 2px;
+            pointer-events: auto;
+            cursor: pointer;
+        }
+        .prox-mark.warning { background: #f4a261; }
+        .prox-mark.danger { background: #e63946; height: 12px; min-width: 10px; }
+        .prox-mark:hover { filter: brightness(1.3); }
         input[type=range] {
             flex: 1;
             accent-color: #00b4d8;
@@ -248,6 +275,31 @@ class MissionWebDashboard:
             font-size: 11px;
             font-family: monospace;
         }
+        /* ---- Cockpit novo (SVG) ---- */
+        #cockpit-root { overflow-y: auto; padding: 12px; display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px; align-content: start; background: #0a1220; }
+        .ck-c3 { grid-column: span 3; } .ck-c12 { grid-column: span 12; }
+        @media (max-width: 1500px) { .ck-c3 { grid-column: span 6; } }
+        @media (max-width: 760px) { .ck-c3 { grid-column: span 12; } }
+        .ck-head { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: baseline; color: #9db0cc; font-size: 13px; }
+        .ck-head b { color: #e6edf7; font-size: 15px; letter-spacing: 1px; text-transform: uppercase; }
+        .ck-head span b { font-size: 13px; letter-spacing: 0; text-transform: none; font-family: monospace; }
+        .ck-pn { background: #0f1a2e; border: 1px solid #1d2f4d; border-radius: 8px; padding: 10px 12px; min-width: 0; }
+        .ck-pn h4 { margin: 0 0 6px; font-size: 12px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: #9db0cc; }
+        .ck-pn svg { display: block; width: 100%; height: auto; max-height: 270px; font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+        .ck-ro { display: flex; flex-wrap: wrap; gap: 4px 16px; font-family: monospace; font-size: 12px; color: #9db0cc; margin-top: 6px; align-items: center; }
+        .ck-ro b { color: #e6edf7; font-weight: 600; }
+        .ck-btn { padding: 2px 8px; font-size: 11px; }
+        .ck-alert { border-radius: 6px; padding: 7px 10px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; font-size: 14px; margin-bottom: 8px; display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+        .ck-alert.safe { background: #123a2b; color: #3fbf86; } .ck-alert.warn { background: #463408; color: #e8a838; }
+        .ck-alert.crit { background: #4a1219; color: #ff5a67; } .ck-alert.none { background: #16233b; color: #9db0cc; }
+        .ck-nb svg { max-height: 340px; }
+        .ck-nb { display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: 12px; align-items: center; }
+        @media (max-width: 760px) { .ck-nb { grid-template-columns: 1fr; } }
+        .ck-tw { overflow-x: auto; }
+        .ck-tw table { border-collapse: collapse; width: 100%; font-size: 12.5px; color: #e6edf7; }
+        .ck-tw th { color: #6d83a6; text-align: left; font-size: 10.5px; letter-spacing: 1px; text-transform: uppercase; padding: 5px 8px; border-bottom: 1px solid #1d2f4d; white-space: nowrap; }
+        .ck-tw td { padding: 6px 8px; border-bottom: 1px solid #1d2f4d; white-space: nowrap; }
+        .ck-tw .n { text-align: right; font-family: monospace; }
     </style>
 </head>
 <body>
@@ -279,7 +331,10 @@ class MissionWebDashboard:
         
         <div class="slider-box">
             <span style="font-size: 12px; color: #9ca3af;">Tempo:</span>
-            <input type="range" id="time-slider" min="__MIN_T__" max="__MAX_T__" step="0.5" value="__T_EVAL__" oninput="onSliderChange(this.value)">
+            <div class="slider-track-wrap">
+                <input type="range" id="time-slider" min="__MIN_T__" max="__MAX_T__" step="0.5" value="__T_EVAL__" oninput="onSliderChange(this.value)">
+                <div id="prox-marks"></div>
+            </div>
             <span id="time-display" class="time-label">00:00 s</span>
         </div>
 
@@ -553,56 +608,228 @@ class MissionWebDashboard:
         }
 
         // ---------- Cockpit ----------
-        function updateCockpitView(f) {
-            const gd = document.getElementById('plot-cockpit');
-            if (!gd || !gd.data) return;
-            const actR = timeline.robots[currentRobot];
-            if (!actR) return;
-            const s = stateAt(actR, f);
-            const active = isActive(actR, f);
-            const yaw = ((s.yaw % 360.0) + 360.0) % 360.0;
+        // Painel de instrumentos em SVG, alimentado pela mesma linha temporal das outras vistas. Mostra o que interessa
+        // para navegar: atitude e eixos do corpo, rumo e rota, velocidade medida contra estimada, vizinhos no
+        // referencial do corpo (azimute, elevação, distância, TCPA, CPA), profundidade e saltos de posição.
+        const CK = { cy: '#27c3dd', ink: '#e6edf7', ink2: '#9db0cc', mut: '#6d83a6', line: '#1d2f4d', red: '#ff5a67', green: '#3fbf86', amber: '#e8a838', blue: '#4ea1ff' };
+        const ckNum = (x, d) => { if (x === null || x === undefined || isNaN(x)) return '–'; const t = x.toFixed(d); return (t.charAt(0) === '-' && parseFloat(t) === 0) ? t.substring(1) : t; };
+        const ckN1 = (x) => ckNum(x, 1);
+        const ckN2 = (x) => ckNum(x, 2);
+        const ckW360 = (a) => ((a % 360) + 360) % 360;
+        const ckW180 = (a) => (((a + 180) % 360) + 360) % 360 - 180;
+        const ckDepthPaths = {};
 
-            let minDist = null;
-            const rs = [], thetas = [], texts = [], colors = [];
-            robotKeys.forEach(id => {
-                if (id === currentRobot) return;
-                const r = timeline.robots[id];
-                if (!isActive(r, f) || !active) return;
-                const t = stateAt(r, f);
-                const dN = t.N - s.N, dE = t.E - s.E, dD = t.D - s.D;
-                const dist = Math.sqrt(dN * dN + dE * dE + dD * dD);
-                if (minDist === null || dist < minDist) minDist = dist;
-                const psi = s.yaw * DEG;
-                const xb = Math.cos(psi) * dN + Math.sin(psi) * dE;
-                const yb = -Math.sin(psi) * dN + Math.cos(psi) * dE;
-                thetas.push(((Math.atan2(yb, xb) / DEG) % 360.0 + 360.0) % 360.0);
-                rs.push(dist);
-                texts.push(id + '<br>Dist: ' + dist.toFixed(1) + 'm');
-                colors.push(dist < 10.0 ? '#e63946' : '#52b788');
+        // Estado completo de um robô no instante f (posição, atitude, velocidades estimadas e medidas, incerteza)
+        function ckState(r, f) {
+            const s = stateAt(r, f);
+            s.vN = at(r.vN, f); s.vE = at(r.vE, f); s.vD = at(r.vD, f);
+            s.u = at(r.u, f); s.v = at(r.v, f); s.w = at(r.w, f); s.sig = at(r.sig, f);
+            return s;
+        }
+        // Matriz de rotação corpo para NED (colunas = eixos x, y, z do corpo em NED, a mesma de bodyAxesNED)
+        function ckMatrix(s) {
+            const ax = bodyAxesNED(s);
+            return [[ax[0][0], ax[1][0], ax[2][0]], [ax[0][1], ax[1][1], ax[2][1]], [ax[0][2], ax[1][2], ax[2][2]]];
+        }
+        function ckQuat(s) {
+            const cr = Math.cos(s.roll * DEG / 2), sr = Math.sin(s.roll * DEG / 2);
+            const cp = Math.cos(s.pitch * DEG / 2), sp = Math.sin(s.pitch * DEG / 2);
+            const yw = ckW180(s.yaw);   // o yaw da linha temporal vem desenrolado (pode passar de 360°): q com w positivo
+            const cy = Math.cos(yw * DEG / 2), sy = Math.sin(yw * DEG / 2);
+            return { w: cr * cp * cy + sr * sp * sy, x: sr * cp * cy - cr * sp * sy, y: cr * sp * cy + sr * cp * sy, z: cr * cp * sy - sr * sp * cy };
+        }
+        function ckLine(a, b, c, w, dash) {
+            return '<line x1="' + a[0].toFixed(1) + '" y1="' + a[1].toFixed(1) + '" x2="' + b[0].toFixed(1) + '" y2="' + b[1].toFixed(1) +
+                '" stroke="' + c + '" stroke-width="' + w + '"' + (dash ? ' stroke-dasharray="3 3"' : '') + ' stroke-linecap="round"/>';
+        }
+        function ckPanel(cls, title, body) { return '<div class="ck-pn ' + cls + '"><h4>' + title + '</h4>' + body + '</div>'; }
+
+        function ckAttitude(s) {
+            const M = ckMatrix(s), q = ckQuat(s);
+            const A = 35 * DEG, E = 26 * DEG, cx = 150, cy = 118, S = 54;
+            const mulM = (p) => [M[0][0] * p[0] + M[0][1] * p[1] + M[0][2] * p[2], M[1][0] * p[0] + M[1][1] * p[1] + M[1][2] * p[2], M[2][0] * p[0] + M[2][1] * p[1] + M[2][2] * p[2]];
+            const proj = (p) => {   // p em NED: ecrã com Este para a direita, Norte para dentro, Cima = -D
+                const x = p[1], y = p[0], z = -p[2];
+                const xr = x * Math.cos(A) - y * Math.sin(A), yr = x * Math.sin(A) + y * Math.cos(A);
+                return [cx + S * xr, cy - S * (z * Math.cos(E) + yr * Math.sin(E))];
+            };
+            const B = (p) => proj(mulM(p));
+            const tail = [[-1.5, -.35, -.25], [-1.5, .35, -.25], [-1.5, .35, .25], [-1.5, -.35, .25]];
+            const mid = [[.6, -.35, -.25], [.6, .35, -.25], [.6, .35, .25], [.6, -.35, .25]];
+            const nose = [1.5, 0, 0];
+            let g = '<svg viewBox="0 0 300 236" role="img">';
+            [['N', [2.1, 0, 0]], ['E', [0, 2.1, 0]], ['D', [0, 0, 2.1]]].forEach(function (a) {
+                const o = proj([0, 0, 0]), e = proj(a[1]);
+                g += ckLine(o, e, '#4b6288', 1, true) + '<text x="' + (e[0] + 4) + '" y="' + (e[1] + 4) + '" font-size="10" fill="' + CK.mut + '" font-family="monospace">' + a[0] + '</text>';
             });
+            [tail, mid].forEach(function (P) { for (let k = 0; k < 4; k++) g += ckLine(B(P[k]), B(P[(k + 1) % 4]), '#7f93b5', 1.4); });
+            for (let k = 0; k < 4; k++) g += ckLine(B(tail[k]), B(mid[k]), '#7f93b5', 1.4) + ckLine(B(mid[k]), B(nose), '#9db0cc', 1.4);
+            [['x', [2.2, 0, 0], CK.red], ['y', [0, 1.5, 0], CK.green], ['z', [0, 0, 1.5], CK.blue]].forEach(function (a) {
+                const o = B([0, 0, 0]), e = B(a[1]);
+                g += ckLine(o, e, a[2], 2.4) + '<circle cx="' + e[0].toFixed(1) + '" cy="' + e[1].toFixed(1) + '" r="3" fill="' + a[2] + '"/><text x="' + (e[0] + 6).toFixed(1) + '" y="' + (e[1] + 4).toFixed(1) + '" font-size="12" font-weight="700" fill="' + a[2] + '" font-family="monospace">' + a[0] + '</text>';
+            });
+            g += '</svg>';
+            const rows = M.map(function (row) { return row.map(function (x) { const t = ckN2(x); return (t.charAt(0) === '-' ? '' : '+') + t; }).join(' '); }).join('<br>');
+            return ckPanel('ck-c3', 'Atitude e eixos do corpo', g +
+                '<div class="ck-ro"><span>roll (balanço) <b>' + ckN1(s.roll) + '°</b></span><span>pitch (arfagem) <b>' + ckN1(s.pitch) + '°</b></span><span>yaw (guinada) <b>' + ckN1(ckW180(s.yaw)) + '°</b></span></div>' +
+                '<div class="ck-ro"><span>quaternion q = (<b>' + q.w.toFixed(3) + '</b>, ' + q.x.toFixed(3) + ', ' + q.y.toFixed(3) + ', ' + q.z.toFixed(3) + ')</span></div>' +
+                '<div class="ck-ro" style="line-height:1.35"><span>Matriz de rotação (corpo para NED)<br><b>' + rows + '</b></span></div>');
+        }
 
-            const risk = (minDist !== null && minDist < 10.0);
-            const statusColor = risk ? '#e63946' : '#2a9d8f';
-            const statusMsg = risk ? 'PERIGO DE COLISÃO (< 10m)' : (minDist === null ? 'SEM OUTROS ROBÔS ATIVOS' : 'ROTA SEGURA');
-            const sg = (v) => (v >= 0 ? '+' : '') + v.toFixed(1);
+        function ckCompass(s) {
+            const spd = Math.hypot(s.vN, s.vE);
+            const cog = spd > 0.3 ? ckW360(Math.atan2(s.vE, s.vN) / DEG) : null;   // rota sobre o fundo, só quando anda
+            const cx = 110, cy = 104, R = 78;
+            const pt = (a, rr) => [cx + rr * Math.sin(a * DEG), cy - rr * Math.cos(a * DEG)];
+            let g = '<svg viewBox="0 0 220 208" role="img"><circle cx="' + cx + '" cy="' + cy + '" r="' + R + '" fill="#0a1220" stroke="#27406a" stroke-width="1.5"/>';
+            for (let a = 0; a < 360; a += 10) {
+                const m = a % 90 === 0, p1 = pt(a, R), p2 = pt(a, R - (m ? 12 : (a % 30 === 0 ? 8 : 4)));
+                g += ckLine(p1, p2, m ? '#9db0cc' : '#4b6288', m ? 1.8 : 1);
+            }
+            [['N', 0], ['E', 90], ['S', 180], ['O', 270]].forEach(function (c) {
+                const p = pt(c[1], R - 24);
+                g += '<text x="' + p[0].toFixed(1) + '" y="' + (p[1] + 5).toFixed(1) + '" text-anchor="middle" font-size="14" font-weight="700" fill="' + (c[0] === 'N' ? CK.red : CK.ink) + '">' + c[0] + '</text>';
+            });
+            if (cog !== null) {
+                const p = pt(cog, R - 8);
+                g += '<line x1="' + cx + '" y1="' + cy + '" x2="' + p[0].toFixed(1) + '" y2="' + p[1].toFixed(1) + '" stroke="' + CK.amber + '" stroke-width="2.4" stroke-dasharray="5 3"/><circle cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) + '" r="4.5" fill="' + CK.amber + '"/>';
+            }
+            const tip = pt(s.yaw, R - 6), l = pt(s.yaw + 150, 16), rr = pt(s.yaw - 150, 16);
+            g += '<polygon points="' + tip[0].toFixed(1) + ',' + tip[1].toFixed(1) + ' ' + l[0].toFixed(1) + ',' + l[1].toFixed(1) + ' ' + cx + ',' + cy + ' ' + rr[0].toFixed(1) + ',' + rr[1].toFixed(1) + '" fill="' + CK.cy + '" opacity=".92"/></svg>';
+            const beta = cog === null ? null : ckW180(cog - ckW360(s.yaw));
+            return ckPanel('ck-c3', 'Bússola: rumo e rota', g +
+                '<div class="ck-ro"><span style="color:' + CK.cy + '">&#9632; rumo <b>' + ckN1(ckW360(s.yaw)) + '°</b></span><span style="color:' + CK.amber + '">&#9679; rota <b>' + (cog === null ? 'parado' : ckN1(cog) + '°') + '</b></span></div>' +
+                '<div class="ck-ro"><span>deriva <b>' + (beta === null ? '–' : ckN1(beta) + '°') + '</b></span><span>velocidade <b>' + ckN2(spd) + ' m/s</b></span></div>');
+        }
 
-            Plotly.restyle(gd, {
-                value: [yaw],
-                'gauge.bar.color': [actR.color],
-                title: [{ text: 'Roll: ' + sg(s.roll) + '° | Pitch: ' + sg(s.pitch) + '°' + (active ? '' : ' [INATIVO]'), font: { color: '#e0e1dd', size: 14 } }]
-            }, [0]);
-            Plotly.restyle(gd, { value: [s.D] }, [1]);
-            Plotly.restyle(gd, { value: [s.spd] }, [2]);
-            Plotly.restyle(gd, { r: [rs], theta: [thetas], hovertext: [texts], text: [texts.map(t => t.split('<br>')[0])], 'marker.color': [colors] }, [3]);
-            Plotly.restyle(gd, { value: [s.turn] }, [4]);
-            Plotly.restyle(gd, {
-                value: [minDist === null ? 0 : minDist],
-                'number.font.color': [statusColor],
-                title: [{
-                    text: '<b>' + statusMsg + '</b><br><span style="font-size:0.8em;color:#e0e1dd">Menor distância: ' + (minDist === null ? '-' : minDist.toFixed(1) + ' m') + '</span>',
-                    font: { size: 16, color: statusColor }
-                }]
-            }, [5]);
+        function ckSpeed(r, f, s) {
+            const W = 300, H = 116, l = 30, rr = 6, t = 8, b = 18, pw = W - l - rr, ph = H - t - b;
+            const a = Math.max(0, Math.floor(f) - 150), z = Math.min(numSteps - 1, Math.floor(f) + 150);
+            const okIdx = (k) => k >= r.k0 && k <= r.k1;
+            let lo = -0.3, hi = 1.0;
+            for (let k = a; k <= z; k++) if (okIdx(k)) { lo = Math.min(lo, r.u[k], r.spd[k]); hi = Math.max(hi, r.u[k], r.spd[k]); }
+            const X = (k) => l + pw * (k - a) / Math.max(1, z - a), Y = (x) => t + ph * (1 - (x - lo) / (hi - lo));
+            const path = function (arr) {
+                let d = '', pen = false;
+                for (let k = a; k <= z; k++) { if (!okIdx(k)) { pen = false; continue; } d += (pen ? 'L' : 'M') + X(k).toFixed(1) + ' ' + Y(arr[k]).toFixed(1) + ' '; pen = true; }
+                return d;
+            };
+            let g = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img">';
+            [lo, 0, hi].forEach(function (x) {
+                g += '<line x1="' + l + '" x2="' + (l + pw) + '" y1="' + Y(x).toFixed(1) + '" y2="' + Y(x).toFixed(1) + '" stroke="' + (x === 0 ? '#4b6288' : CK.line) + '"/><text x="' + (l - 4) + '" y="' + (Y(x) + 3.5).toFixed(1) + '" text-anchor="end" font-size="9.5" fill="' + CK.mut + '" font-family="monospace">' + x.toFixed(1) + '</text>';
+            });
+            g += '<path d="' + path(r.spd) + '" fill="none" stroke="' + CK.amber + '" stroke-width="1.8" stroke-dasharray="4 3"/><path d="' + path(r.u) + '" fill="none" stroke="' + CK.cy + '" stroke-width="2"/>';
+            g += '<line x1="' + X(f) + '" x2="' + X(f) + '" y1="' + t + '" y2="' + (t + ph) + '" stroke="' + CK.ink + '" stroke-width="1.2"/>';
+            g += '<text x="' + l + '" y="' + (H - 4) + '" font-size="9.5" fill="' + CK.mut + '" font-family="monospace">−5 min</text><text x="' + (l + pw) + '" y="' + (H - 4) + '" text-anchor="end" font-size="9.5" fill="' + CK.mut + '" font-family="monospace">+5 min</text></svg>';
+            return ckPanel('ck-c3', 'Velocidade: medida e estimada', g +
+                '<div class="ck-ro"><span style="color:' + CK.cy + '">&#9472; medida (twist) <b>' + ckN2(s.u) + ' m/s</b></span><span style="color:' + CK.amber + '">&#9548; das posições <b>' + ckN2(s.spd) + ' m/s</b></span></div>' +
+                '<div class="ck-ro"><span>diferença <b>' + ckN2(s.spd - s.u) + ' m/s</b></span><span>velocidade lateral <b>' + ckN2(s.v) + '</b></span><span>velocidade vertical <b>' + ckN2(s.w) + '</b></span></div>');
+        }
+
+        function ckDepth(r, id, f, s) {
+            const W = 300, H = 130, l = 28, rr = 6, t = 8, b = 16, pw = W - l - rr, ph = H - t - b;
+            const X = (k) => l + pw * k / (numSteps - 1), Y = (d) => t + ph * (Math.max(-2, Math.min(34, d)) + 2) / 36;
+            if (!ckDepthPaths[id]) {
+                let d = '';
+                for (let k = Math.max(0, Math.ceil(r.k0)); k <= Math.min(numSteps - 1, Math.floor(r.k1)); k += 2) d += (d ? 'L' : 'M') + X(k).toFixed(1) + ' ' + Y(r.D[k]).toFixed(1) + ' ';
+                ckDepthPaths[id] = d;
+            }
+            let g = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img">';
+            [0, 10, 20, 30].forEach(function (d) {
+                g += '<line x1="' + l + '" x2="' + (l + pw) + '" y1="' + Y(d).toFixed(1) + '" y2="' + Y(d).toFixed(1) + '" stroke="' + (d === 0 ? '#4b6288' : CK.line) + '"/><text x="' + (l - 4) + '" y="' + (Y(d) + 3.5).toFixed(1) + '" text-anchor="end" font-size="9.5" fill="' + CK.mut + '" font-family="monospace">' + d + '</text>';
+            });
+            g += '<path d="' + ckDepthPaths[id] + '" fill="none" stroke="' + r.color + '" stroke-width="2"/>';
+            (r.jumps || []).forEach(function (e) {
+                const x = X(e.t / dt_step);
+                g += '<polygon points="' + x.toFixed(1) + ',' + (t + ph + 1) + ' ' + (x - 4).toFixed(1) + ',' + (t + ph + 9) + ' ' + (x + 4).toFixed(1) + ',' + (t + ph + 9) + '" fill="' + CK.red + '"/>';
+            });
+            g += '<line x1="' + X(f).toFixed(1) + '" x2="' + X(f).toFixed(1) + '" y1="' + t + '" y2="' + (t + ph) + '" stroke="' + CK.ink + '" stroke-width="1.2"/></svg>';
+            const phase = s.D < 3 ? 'à superfície' : 'em imersão';
+            const ev = (r.jumps || []).map(function (e) {
+                return '<button class="ck-btn" onclick="ckJump(' + e.t + ')">' + fmtElapsed(e.t) + ' · salto de ' + e.m.toFixed(1) + ' m' + (e.sub ? ' (imerso)' : '') + '</button>';
+            }).join(' ');
+            return ckPanel('ck-c3', 'Profundidade e eventos de navegação', g +
+                '<div class="ck-ro"><span>profundidade (Down) <b>' + ckN1(s.D) + ' m</b></span><span>fase <b>' + phase + '</b></span></div>' +
+                '<div class="ck-ro"><span>incerteza horizontal declarada (σ) <b>' + (s.sig * 100).toFixed(1) + ' cm</b></span></div>' +
+                '<div class="ck-ro"><span>saltos no registo bruto:</span>' + (ev || '<b>nenhum</b>') + '</div>');
+        }
+        function ckJump(relSec) {
+            currentTime = t0_base + relSec;
+            document.getElementById('time-slider').value = currentTime;
+            onSliderChange(currentTime);
+        }
+
+        function ckNeighbours(id, f, s) {
+            const cx = 150, cy = 150, R0 = 128, rmap = (d) => R0 * Math.sqrt(Math.min(d, 400) / 400);
+            const danger = timeline.collision_threshold_m, warn = timeline.proximity_warning_m;
+            let g = '<svg viewBox="0 0 300 300" role="img">';
+            g += '<circle cx="' + cx + '" cy="' + cy + '" r="' + rmap(danger).toFixed(1) + '" fill="' + CK.red + '" opacity=".2"/>';
+            [[danger, CK.red, true], [warn, CK.amber, true], [100, '#3b5280', false], [300, '#3b5280', false]].forEach(function (c) {
+                g += '<circle cx="' + cx + '" cy="' + cy + '" r="' + rmap(c[0]).toFixed(1) + '" fill="none" stroke="' + c[1] + '" stroke-width="1"' + (c[2] ? ' stroke-dasharray="4 3"' : '') + '/><text x="' + (cx + 4) + '" y="' + (cy - rmap(c[0]) - 2).toFixed(1) + '" font-size="9.5" fill="' + CK.ink2 + '" font-family="monospace">' + c[0] + ' m</text>';
+            });
+            g += '<line x1="' + cx + '" y1="' + (cy + R0) + '" x2="' + cx + '" y2="' + (cy - R0) + '" stroke="' + CK.red + '" stroke-width="1.2"/><line x1="' + (cx - R0) + '" y1="' + cy + '" x2="' + (cx + R0) + '" y2="' + cy + '" stroke="' + CK.green + '" stroke-width="1.2"/>';
+            g += '<text x="' + (cx + 5) + '" y="' + (cy - R0 - 2) + '" font-size="11" font-weight="700" fill="' + CK.red + '" font-family="monospace">x proa</text><text x="296" y="' + (cy - 5) + '" text-anchor="end" font-size="11" font-weight="700" fill="' + CK.green + '" font-family="monospace">y estibordo</text>';
+            g += '<polygon points="' + cx + ',' + (cy - 9) + ' ' + (cx + 6) + ',' + (cy + 7) + ' ' + (cx - 6) + ',' + (cy + 7) + '" fill="' + timeline.robots[id].color + '" stroke="' + CK.ink + '" stroke-width="1"/>';
+            let rows = '', minD = null;
+            robotKeys.forEach(function (o) {
+                if (o === id) return;
+                const ro = timeline.robots[o];
+                const tag = '<b style="color:' + ro.color + '">&#9632;</b> ' + o;
+                if (!isActive(ro, f)) {
+                    rows += '<tr><td>' + tag + '</td><td colspan="6" style="color:' + CK.mut + '">sem dados (ativo de ' + fmtElapsed(ro.k0 * dt_step) + ' a ' + fmtElapsed(ro.k1 * dt_step) + ')</td></tr>';
+                    return;
+                }
+                const t = ckState(ro, f);
+                const dN = t.N - s.N, dE = t.E - s.E, dD = t.D - s.D;
+                const b = toBody(s, dN, dE, dD);
+                const hor = Math.hypot(b.x, b.y), rng = Math.hypot(b.x, b.y, b.z);
+                const az = Math.atan2(b.y, b.x) / DEG, el = Math.atan2(-b.z, hor) / DEG;
+                const rv = [t.vN - s.vN, t.vE - s.vE, t.vD - s.vD], d = [dN, dE, dD];
+                const vv = rv[0] * rv[0] + rv[1] * rv[1] + rv[2] * rv[2], dot = d[0] * rv[0] + d[1] * rv[1] + d[2] * rv[2];
+                const clos = -dot / Math.max(rng, 1e-6);
+                // TCPA e CPA como em proximity.py: movimento linear, horizonte de 60 s
+                let tcpaTxt, cpa = rng;
+                if (vv < 1e-8) tcpaTxt = 'estável';
+                else {
+                    const tc = -dot / vv;
+                    if (tc <= 0) tcpaTxt = 'a afastar';
+                    else {
+                        const th = Math.min(tc, 60.0);
+                        cpa = Math.hypot(d[0] + rv[0] * th, d[1] + rv[1] * th, d[2] + rv[2] * th);
+                        tcpaTxt = tc > 60.0 ? '> 60 s' : fmtElapsed(tc);
+                    }
+                }
+                if (minD === null || rng < minD) minD = rng;
+                const p = [cx + rmap(rng) * Math.sin(az * DEG), cy - rmap(rng) * Math.cos(az * DEG)];
+                g += '<line x1="' + cx + '" y1="' + cy + '" x2="' + p[0].toFixed(1) + '" y2="' + p[1].toFixed(1) + '" stroke="' + ro.color + '" stroke-width="1" stroke-dasharray="2 3" opacity=".7"/>' +
+                    '<circle cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) + '" r="6" fill="' + ro.color + '" stroke="' + CK.ink + '" stroke-width="1.5"/>' +
+                    '<text x="' + (p[0] + 9).toFixed(1) + '" y="' + (p[1] + 4).toFixed(1) + '" font-size="11" font-weight="600" fill="' + CK.ink + '">' + o.replace('Robot ', 'R') + ' · ' + rng.toFixed(0) + ' m</text>';
+                rows += '<tr><td>' + tag + '</td><td class="n">' + ckN1(az) + '°</td><td class="n">' + ckN1(el) + '°</td><td class="n">' + ckN1(rng) + '</td><td class="n">' + (clos >= 0 ? '+' : '') + ckN2(clos) +
+                    '</td><td class="n">' + tcpaTxt + '</td><td class="n">' + ckN1(cpa) + '</td></tr>';
+            });
+            g += '</svg>';
+            const cls = minD === null ? 'none' : (minD < danger ? 'crit' : (minD < warn ? 'warn' : 'safe'));
+            const txt = minD === null ? 'Sem outros robots ativos' : (minD < danger ? 'Perigo de colisão' : (minD < warn ? 'Aviso de proximidade' : 'Sem risco de colisão'));
+            return ckPanel('ck-c12', 'Vizinhos no referencial do corpo',
+                '<div class="ck-alert ' + cls + '"><span>' + txt + '</span><span style="font-weight:600;letter-spacing:0;text-transform:none">' + (minD === null ? 'sem dados para comparar' : 'distância mínima ' + minD.toFixed(1) + ' m') + '</span></div>' +
+                '<div class="ck-nb"><div>' + g + '</div><div class="ck-tw"><table><thead><tr><th>Vizinho</th><th class="n">Azimute</th><th class="n">Elevação</th><th class="n">Distância (m)</th><th class="n">Aproximação (m/s)</th><th class="n">Tempo até ao CPA</th><th class="n">CPA (m)</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>' +
+                '<div class="ck-ro"><span>Δ(corpo) = Rᵀ · (p(vizinho) − p(este)) &nbsp; azimute = atan2(y, x) &nbsp; elevação = atan2(−z, √(x²+y²)) &nbsp; CPA = ponto de maior aproximação, TCPA = tempo até lá</span></div>');
+        }
+
+        function updateCockpitView(f) {
+            const root = document.getElementById('cockpit-root');
+            const r = timeline.robots[currentRobot];
+            if (!root || !r) return;
+            const head = '<div class="ck-head ck-c12"><b>Cockpit · ' + currentRobot + '</b>';
+            if (!isActive(r, f)) {
+                root.innerHTML = head + '</div><div class="ck-pn ck-c12"><h4>' + currentRobot + ' sem dados neste instante</h4>' +
+                    '<p style="color:' + CK.ink2 + ';margin-bottom:10px">Este robot tem dados de ' + fmtElapsed(r.k0 * dt_step) + ' a ' + fmtElapsed(r.k1 * dt_step) + '. Escolha um instante dentro desta janela.</p>' +
+                    '<button class="ck-btn" onclick="ckJump(' + (r.k0 * dt_step + 2).toFixed(1) + ')">Ir para o início do ' + currentRobot + '</button></div>';
+                return;
+            }
+            const s = ckState(r, f);
+            root.innerHTML = head + '<span>Posição NED: Norte <b>' + ckN1(s.N) + '</b> m · Este <b>' + ckN1(s.E) + '</b> m · Profundidade (Down) <b>' + ckN1(s.D) + '</b> m</span></div>' +
+                ckAttitude(s) + ckCompass(s) + ckSpeed(r, f, s) + ckDepth(r, currentRobot, f, s) + ckNeighbours(currentRobot, f, s);
         }
 
         // ---------- Gráfico 2D de distâncias: move o cursor de tempo ----------
@@ -644,6 +871,72 @@ class MissionWebDashboard:
             else if (currentView === 'cockpit') updateCockpitView(f);
             else if (currentView === 'prox') updateProxView(f);
         }
+
+        // ---------- Marcas de proximidade na barra do tempo ----------
+        // Cada marca é um período em que dois robôs ativos estão a menos de proximity_warning_m (amarelo) ou a menos de
+        // collision_threshold_m (vermelho). Ao clicar numa marca, o tempo salta para 10 s antes do início do período.
+        function jumpToTime(t) {
+            const target = Math.max(t0_base, Math.min(t_max, t));
+            document.getElementById('time-slider').value = target;
+            onSliderChange(target);
+        }
+
+        function buildProximityMarks() {
+            const box = document.getElementById('prox-marks');
+            if (!box) return;
+            box.innerHTML = '';
+            const span = t_max - t0_base;
+            if (!(span > 0)) return;
+            const warnM = timeline.proximity_warning_m || 30.0;
+            const dangerM = timeline.collision_threshold_m || 10.0;
+            const marks = [];
+            for (let i = 0; i < robotKeys.length; i++) {
+                for (let j = i + 1; j < robotKeys.length; j++) {
+                    const ra = timeline.robots[robotKeys[i]], rb = timeline.robots[robotKeys[j]];
+                    [[warnM, 'warning'], [dangerM, 'danger']].forEach(([limit, kind]) => {
+                        let start = -1, minD = Infinity, kMin = 0;
+                        for (let k = 0; k <= numSteps; k++) {
+                            let d = Infinity;
+                            if (k < numSteps && isActive(ra, k) && isActive(rb, k)) {
+                                const dn = ra.N[k] - rb.N[k], de = ra.E[k] - rb.E[k], dd = ra.D[k] - rb.D[k];
+                                d = Math.sqrt(dn * dn + de * de + dd * dd);
+                            }
+                            if (d < limit) {
+                                if (start < 0) { start = k; minD = Infinity; }
+                                if (d < minD) { minD = d; kMin = k; }
+                            } else if (start >= 0) {
+                                marks.push({ kind: kind, a: robotKeys[i], b: robotKeys[j], limit: limit, k0: start, k1: k - 1, minD: minD, kMin: kMin });
+                                start = -1;
+                            }
+                        }
+                    });
+                }
+            }
+            marks.sort((p, q) => (p.kind === q.kind ? p.k0 - q.k0 : (p.kind === 'warning' ? -1 : 1)));   // o vermelho fica por cima
+            marks.forEach(m => {
+                const tStart = t0_base + m.k0 * dt_step, tEnd = t0_base + m.k1 * dt_step, tMin = t0_base + m.kMin * dt_step;
+                const el = document.createElement('div');
+                el.className = 'prox-mark ' + m.kind;
+                el.style.setProperty('--c', String(((tStart + tEnd) / 2 - t0_base) / span));
+                el.style.setProperty('--w', String((tEnd - tStart) / span));
+                el.dataset.kind = m.kind;
+                el.dataset.pair = m.a + ' e ' + m.b;
+                el.dataset.t0 = String(tStart);
+                el.dataset.t1 = String(tEnd);
+                el.dataset.minDist = m.minD.toFixed(1);
+                // (sem barras invertidas: este JavaScript vive dentro de um texto Python; NL = quebra de linha)
+                el.title = [
+                    (m.kind === 'danger' ? 'PERIGO DE COLISÃO' : 'ATENÇÃO: robots próximos') + ' (menos de ' + m.limit.toFixed(0) + ' m)',
+                    m.a + ' e ' + m.b,
+                    'De ' + fmtElapsed(tStart - t0_base) + ' a ' + fmtElapsed(tEnd - t0_base),
+                    'Distância mínima: ' + m.minD.toFixed(1) + ' m (aos ' + fmtElapsed(tMin - t0_base) + ')',
+                    'Clique para ir para 10 s antes'
+                ].join(String.fromCharCode(10));
+                el.addEventListener('click', () => jumpToTime(tStart - 10.0));
+                box.appendChild(el);
+            });
+        }
+        buildProximityMarks();
 
         // ---------- controlos ----------
         function setView(view) {
