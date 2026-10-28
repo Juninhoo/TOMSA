@@ -302,24 +302,20 @@ class MissionWebDashboard:
         }
         #tp-radar .radar-bar button { padding: 2px 11px; font-size: 15px; line-height: 18px; }
         #tp-radar .radar-bar b { color: #5eead4; font-family: Consolas, Menlo, monospace; font-size: 14px; }
-        #tp-cockpit { bottom: 16px; width: 336px; padding: 10px; transform-origin: bottom left; }
-        #tp-cockpit .tpk-head { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 700; margin-bottom: 8px; }
+        #tp-cockpit { bottom: 16px; width: 452px; padding: 12px; transform-origin: bottom left; }
+        #tp-cockpit .tpk-head { display: flex; align-items: center; gap: 8px; font-size: 16px; font-weight: 700; margin-bottom: 10px; }
         #tp-cockpit .tpk-dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
         #tp-cockpit .tpk-time { margin-left: auto; font-family: Consolas, Menlo, monospace; font-size: 12px; color: #48cae4; font-weight: 400; }
         #tp-cockpit .status { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px; letter-spacing: 0.5px; }
         #tp-cockpit .status.on { background: rgba(42, 157, 143, 0.25); color: #52d1b5; }
         #tp-cockpit .status.off { background: rgba(156, 163, 175, 0.2); color: #9ca3af; }
-        #tp-cockpit .tpk-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+        #tp-cockpit .tpk-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
         #tp-cockpit .tpk-cell {
-            background: rgba(27, 38, 59, 0.65); border: 1px solid #243247; border-radius: 7px;
-            padding: 4px 4px 3px; text-align: center; min-height: 106px;
+            background: rgba(27, 38, 59, 0.65); border: 1px solid #243247; border-radius: 8px;
+            padding: 6px 4px 4px; text-align: center;
         }
-        #tp-cockpit .tpk-cell canvas { display: block; width: 150px; height: 84px; margin: 0 auto; }
-        #tp-cockpit .tpk-title { font-size: 9.5px; letter-spacing: 0.5px; color: #9ca3af; text-transform: uppercase; font-weight: 700; }
-        #tp-cockpit .tpk-cpa { display: flex; flex-direction: column; justify-content: center; gap: 2px; }
-        #tp-cockpit .tpk-status { font-size: 12px; font-weight: 800; letter-spacing: 0.3px; }
-        #tp-cockpit .tpk-dist { font-family: Consolas, Menlo, monospace; font-size: 22px; font-weight: 700; }
-        #tp-cockpit .tpk-sub { font-size: 10.5px; color: #9ca3af; }
+        #tp-cockpit .tpk-cell canvas { display: block; width: 200px; height: 112px; margin: 2px auto 0; }
+        #tp-cockpit .tpk-title { font-size: 11.5px; letter-spacing: 0.6px; color: #b6c2d4; text-transform: uppercase; font-weight: 700; }
         #tp-hint {
             position: absolute; right: 16px; bottom: 16px; z-index: 40;
             font-size: 11px; color: #9ca3af; background: rgba(8, 14, 24, 0.7);
@@ -432,16 +428,10 @@ class MissionWebDashboard:
                     <span id="tpk-time" class="tpk-time">-</span>
                 </section>
                 <section class="tpk-grid">
-                    <section class="tpk-cell"><section class="tpk-title">Atitude &amp; Orientação</section><canvas id="tpk-hdg" width="300" height="168"></canvas></section>
-                    <section class="tpk-cell"><section class="tpk-title">Profundímetro</section><canvas id="tpk-depth" width="300" height="168"></canvas></section>
-                    <section class="tpk-cell"><section class="tpk-title">Velocímetro (avanço)</section><canvas id="tpk-spd" width="300" height="168"></canvas></section>
-                    <section class="tpk-cell"><section class="tpk-title">Taxa de viragem (yaw)</section><canvas id="tpk-turn" width="300" height="168"></canvas></section>
-                    <section class="tpk-cell"><section class="tpk-title">Horizonte artificial</section><canvas id="tpk-horizon" width="300" height="168"></canvas></section>
-                    <section class="tpk-cell tpk-cpa"><section class="tpk-title">Segurança CPA</section>
-                        <section id="tpk-cpa-status" class="tpk-status">-</section>
-                        <section id="tpk-cpa-dist" class="tpk-dist">-</section>
-                        <section id="tpk-cpa-sub" class="tpk-sub">-</section>
-                        <section id="tpk-cpa-delta" class="tpk-sub">-</section></section>
+                    <section class="tpk-cell"><section class="tpk-title">Velocidade</section><canvas id="tpk-spd" width="600" height="336"></canvas></section>
+                    <section class="tpk-cell"><section class="tpk-title">Rotação</section><canvas id="tpk-turn" width="600" height="336"></canvas></section>
+                    <section class="tpk-cell"><section class="tpk-title">Profundidade</section><canvas id="tpk-depth" width="600" height="336"></canvas></section>
+                    <section class="tpk-cell"><section class="tpk-title">Inclinação</section><canvas id="tpk-horizon" width="600" height="336"></canvas></section>
                 </section>
             </aside>
             <aside id="tp-hint">Arrastar: rodar à volta do robô &middot; Roda do rato / <kbd>+</kbd> <kbd>-</kbd>: distância &middot; Duplo clique: repor</aside>
@@ -952,51 +942,13 @@ class MissionWebDashboard:
         function setText(id, txt) { const el = document.getElementById(id); if (el && el.textContent !== txt) el.textContent = txt; }
 
         // ---------- Mini-cockpit: as mesmas grandezas e escalas da página Cockpit ----------
-        // Mostrador semicircular (como os go.Indicator do Plotly): fundo, zonas, barra até ao valor, marcas e número.
-        function drawGauge(id, o) {
-            const cv = document.getElementById(id);
-            if (!cv) return;
-            const ctx = cv.getContext('2d');
-            const W = cv.width, H = cv.height, cx = W / 2, cy = H - 44, r = H - 86;     // margem no topo para a etiqueta de cima
-            const frac = (v) => (Math.min(o.max, Math.max(o.min, v)) - o.min) / (o.max - o.min);
-            const angOf = (v) => Math.PI + frac(v) * Math.PI;      // da esquerda (min) à direita (max), por cima
-            ctx.clearRect(0, 0, W, H);
-            ctx.lineCap = 'butt';
-            ctx.strokeStyle = '#1b263b'; ctx.lineWidth = 22;
-            ctx.beginPath(); ctx.arc(cx, cy, r, Math.PI, 2 * Math.PI); ctx.stroke();
-            (o.zones || []).forEach(z => {
-                ctx.strokeStyle = z.color; ctx.lineWidth = 22;
-                ctx.beginPath(); ctx.arc(cx, cy, r, angOf(z.from), angOf(z.to)); ctx.stroke();
-            });
-            if (o.value !== null) {
-                const from = o.from === undefined ? o.min : o.from;   // barra centrada em 'from' (ex.: zero na taxa de viragem)
-                const a0 = angOf(Math.min(from, o.value)), a1 = angOf(Math.max(from, o.value));
-                ctx.strokeStyle = o.color; ctx.lineWidth = 12;
-                ctx.beginPath(); ctx.arc(cx, cy, r, a0, Math.max(a1, a0 + 0.02)); ctx.stroke();
-            }
-            if (o.threshold !== undefined) {
-                const a = angOf(o.threshold);
-                ctx.strokeStyle = '#e63946'; ctx.lineWidth = 4;
-                ctx.beginPath(); ctx.moveTo(cx + (r - 14) * Math.cos(a), cy + (r - 14) * Math.sin(a)); ctx.lineTo(cx + (r + 14) * Math.cos(a), cy + (r + 14) * Math.sin(a)); ctx.stroke();
-            }
-            ctx.fillStyle = '#cbd5e1'; ctx.font = '17px Segoe UI, Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-            (o.ticks || []).forEach((t, k) => {
-                const a = angOf(t), rr = r + 22;
-                ctx.fillText(o.tickLabels ? o.tickLabels[k] : String(t), cx + rr * Math.cos(a), cy + rr * Math.sin(a) + 4);
-            });
-            ctx.textBaseline = 'alphabetic';
-            ctx.font = 'bold 34px Consolas, Menlo, monospace'; ctx.fillStyle = o.textColor || '#f3f4f6';
-            ctx.fillText(o.value === null ? '–' : o.text, cx, cy + 4);
-            ctx.font = '19px Segoe UI, Arial'; ctx.fillStyle = '#9ca3af';
-            ctx.fillText(o.unit, cx, cy + 32);
-        }
-
         // Conta-quilómetros de ponteiro (velocidades): arco de 240°, marcas, zonas coloridas e uma seta que aponta o valor
         function drawNeedleGauge(id, o) {
             const cv = document.getElementById(id);
             if (!cv) return;
             const ctx = cv.getContext('2d');
-            const W = cv.width, H = cv.height, cx = W / 2, cy = 94, r = 64;
+            ctx.setTransform(cv.width / 300, 0, 0, cv.width / 300, 0, 0);   // desenho em coordenadas lógicas 300x168
+            const W = 300, H = 168, cx = W / 2, cy = 94, r = 64;
             const A0 = 150 * DEG, SWEEP = 240 * DEG;                   // do canto inferior esquerdo ao inferior direito
             const frac = (v) => (Math.min(o.max, Math.max(o.min, v)) - o.min) / (o.max - o.min);
             const angOf = (v) => A0 + frac(v) * SWEEP;
@@ -1054,7 +1006,8 @@ class MissionWebDashboard:
             const cv = document.getElementById(id);
             if (!cv) return;
             const ctx = cv.getContext('2d');
-            const W = cv.width, H = cv.height;
+            ctx.setTransform(cv.width / 300, 0, 0, cv.width / 300, 0, 0);   // desenho em coordenadas lógicas 300x168
+            const W = 300, H = 168;
             const x0 = 96, w = 46, y0 = 12, h = H - 24;                 // tubo
             const yOf = (d) => y0 + Math.min(1, Math.max(0, d / maxDepth)) * h;
             ctx.clearRect(0, 0, W, H);
@@ -1109,7 +1062,8 @@ class MissionWebDashboard:
             const cv = document.getElementById(id);
             if (!cv) return;
             const ctx = cv.getContext('2d');
-            const W = cv.width, H = cv.height, r = H / 2 - 8, cx = r + 14, cy = H / 2;
+            ctx.setTransform(cv.width / 300, 0, 0, cv.width / 300, 0, 0);   // desenho em coordenadas lógicas 300x168
+            const W = 300, H = 168, r = H / 2 - 8, cx = r + 14, cy = H / 2;
             ctx.clearRect(0, 0, W, H);
             ctx.save();
             ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2 * Math.PI); ctx.clip();
@@ -1147,10 +1101,7 @@ class MissionWebDashboard:
             setText('tpk-status', act ? 'ATIVO' : 'INATIVO');
             setText('tpk-time', fmtElapsed(f * dt_step));
 
-            const hdg = ((s.yaw % 360.0) + 360.0) % 360.0;
-            // escalas iguais às da página Cockpit (cockpit_view.py)
-            drawGauge('tpk-hdg', { value: act ? hdg : null, min: 0, max: 360, ticks: [0, 90, 180, 270, 360], tickLabels: ['N', 'E', 'S', 'W', 'N'],
-                color: me.color, text: hdg.toFixed(0) + '°', unit: 'proa', textColor: '#48cae4' });
+            // escalas iguais às da página Cockpit original (velocidade, viragem, profundidade)
             // velocidade vertical (derivada da profundidade, positiva = a descer) para a seta de tendência
             const vz = (at(me.D, Math.min(numSteps - 1, f + 0.5)) - at(me.D, Math.max(0, f - 0.5))) / dt_step;
             drawDepthBar('tpk-depth', s.D, 35, 32, vz, act);
@@ -1161,37 +1112,6 @@ class MissionWebDashboard:
                 zones: [{ from: -45, to: -30, color: '#7c2d12' }, { from: 30, to: 45, color: '#7c2d12' }],
                 color: '#f4a261', text: (s.turn >= 0 ? '+' : '') + s.turn.toFixed(1), unit: '°/s', textColor: '#f4a261' });
             drawHorizon('tpk-horizon', s.roll, s.pitch, act);
-
-            // Segurança CPA: robô mais próximo, com os limiares da configuração (amarelo = aviso, vermelho = colisão)
-            let best = null;
-            if (act) robotKeys.forEach(id => {
-                if (id === currentRobot) return;
-                const r = timeline.robots[id];
-                if (!isActive(r, f)) return;
-                const t = stateAt(r, f);
-                const dN = t.N - s.N, dE = t.E - s.E, dD = t.D - s.D;
-                const d = Math.sqrt(dN * dN + dE * dE + dD * dD);
-                if (!best || d < best.d) {
-                    const p = relHeadingUp(s.yaw * DEG, dN, dE);
-                    best = { id: id, d: d, brg: Math.atan2(p.right, p.fwd) / DEG };
-                }
-            });
-            const stEl = document.getElementById('tpk-cpa-status'), dEl = document.getElementById('tpk-cpa-dist');
-            if (!best) {
-                setText('tpk-cpa-status', act ? 'SEM OUTROS ROBÔS ATIVOS' : 'ROBÔ INATIVO');
-                stEl.style.color = '#9ca3af'; dEl.style.color = '#9ca3af';
-                setText('tpk-cpa-dist', '–'); setText('tpk-cpa-sub', '-'); setText('tpk-cpa-delta', '-');
-                return;
-            }
-            const danger = best.d < timeline.collision_threshold_m, warn = best.d < timeline.proximity_warning_m;
-            const col = danger ? '#f87171' : (warn ? '#fb923c' : '#2a9d8f');
-            setText('tpk-cpa-status', danger ? 'PERIGO DE COLISÃO' : (warn ? 'ATENÇÃO: PRÓXIMO' : 'ROTA SEGURA'));
-            stEl.style.color = col; dEl.style.color = col;
-            setText('tpk-cpa-dist', best.d.toFixed(1) + ' m');
-            const side = Math.abs(best.brg) < 10 ? 'à proa' : (Math.abs(best.brg) > 170 ? 'à popa' : (best.brg > 0 ? 'estibordo' : 'bombordo'));
-            setText('tpk-cpa-sub', best.id + ' · ' + (best.brg >= 0 ? '+' : '') + best.brg.toFixed(0) + '° ' + side);
-            const delta = best.d - timeline.collision_threshold_m;
-            setText('tpk-cpa-delta', (delta >= 0 ? '▲ +' : '▼ ') + delta.toFixed(1) + ' m vs limiar ' + timeline.collision_threshold_m + ' m');
         }
 
         // Em ecrãs baixos, reduz o radar e o mini-cockpit à mesma escala para caberem sem se sobreporem
