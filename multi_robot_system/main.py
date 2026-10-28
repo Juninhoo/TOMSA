@@ -92,7 +92,10 @@ def load_mission(config_path: str) -> Tuple[MissionDataset, dict]:
             vel_ned=raw_dict["vel_ned"],
             speed_longitudinal=raw_dict["speed_longitudinal"],
             turn_rate_yaw=raw_dict["turn_rate_yaw"],
-            cov_diag=raw_dict["cov_diag"]
+            cov_diag=raw_dict["cov_diag"],
+            vel_body_meas=raw_dict.get("vel_body_meas"),
+            sigma_h_decl=raw_dict.get("sigma_h_decl"),
+            jump_events=raw_dict.get("jump_events")
         )
         trajectories[r_id] = traj
         dt_ms = (time.perf_counter() - t0) * 1000.0
