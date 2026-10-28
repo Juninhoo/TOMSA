@@ -299,7 +299,7 @@ def create_global_3d_figure(
 
 
 # -------------------------------------------------------------
-# 3. Vista em 1ª Pessoa (POV) - a mesma cena 3D, com a câmara dentro do robô ativo
+# 3. Vista em 3ª Pessoa - a mesma cena 3D, com a câmara atrás e acima do robô ativo
 # -------------------------------------------------------------
 def create_pov_camera_figure(
     dataset: MissionDataset,
@@ -307,10 +307,11 @@ def create_pov_camera_figure(
     active_robot_id: str,
     fov_deg: float = 70.0
 ) -> go.Figure:
-    """Cena 3D idêntica à Vista Global (mesmos traces e ordem), usada em 1ª pessoa.
+    """Cena 3D idêntica à Vista Global (mesmos traces e ordem), usada na Vista 3ª Pessoa.
 
-    A câmara (eye/center/up) é posicionada em JS a cada frame no nariz do robô ativo, a olhar na direção da
-    proa e com o 'up' do corpo (roll). O casco do próprio robô fica invisível; os outros são desenhados maiores.
+    A câmara (eye/center) é posicionada em JS a cada frame atrás e acima do robô ativo, a olhar para a proa
+    (rumo alisado). Por cima da cena, o dashboard desenha um radar (canto superior esquerdo) e um painel de
+    estatísticas do robô ativo (canto inferior esquerdo). O nome da função mantém-se por compatibilidade.
     """
     fig = create_global_3d_figure(dataset, current_time, active_robot_id)
     fig.update_layout(showlegend=False, margin=dict(l=0, r=0, t=0, b=0))

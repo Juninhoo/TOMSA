@@ -46,6 +46,8 @@ camera:
 spatial:
   neighbor_radius_m: 250.0      # Raio de monitorização circundante
   collision_threshold_m: 10.0   # Limiar de aviso crítico de colisão (< 10 metros)
+  proximity_warning_m: 30.0     # Aviso amarelo no dashboard: robots a menos de 30 metros
+  radar_range_m: 100.0          # Alcance inicial do radar da Vista 3ª Pessoa (botões - / +: 50/100/250/500/1000 m)
   seabed_margin_m: 5.0          # Margem de folga abaixo da cota mais funda
 
 # Parâmetros de filtragem estocástica e suavização
