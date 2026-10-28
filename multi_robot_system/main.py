@@ -44,6 +44,7 @@ def load_mission(config_path: str) -> Tuple[MissionDataset, dict]:
         cfg = yaml.safe_load(f)
 
     def _resolve(csv_file: str) -> str:
+        # aceita o caminho como está ou relativo à pasta multi_robot_system
         # Se for caminho relativo à pasta multi_robot_system
         return csv_file if Path(csv_file).is_file() else str(Path("multi_robot_system") / csv_file)
 
@@ -109,6 +110,7 @@ def load_mission(config_path: str) -> Tuple[MissionDataset, dict]:
 
 
 def main():
+    """Ponto de entrada: lê os argumentos, carrega a missão (CSV, Kalman, RTS) e abre o painel web, o HTML ou os testes."""
     parser = argparse.ArgumentParser(
         description="TOMSA 2026 - Multi-Robot Subsea Trajectory System (INESC TEC Aguçadoura)"
     )

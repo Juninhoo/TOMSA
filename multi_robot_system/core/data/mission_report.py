@@ -12,6 +12,7 @@ import numpy as np
 
 
 def _level(d_min: float, danger_m: float, warning_m: float) -> str:
+    """Classifica a distância mínima de um encontro: perigo, atenção ou simples aproximação."""
     if d_min < danger_m:
         return "perigo"
     if d_min < warning_m:

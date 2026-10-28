@@ -88,6 +88,8 @@ class MissionWebDashboard:
         sorted_robots = sorted(self.dataset.trajectories.keys())
 
         def _unwrap_deg(a):
+            # Método: np.unwrap tira os saltos de 360 graus. Obtemos: ângulos contínuos (359 para 1 deixa de ser um salto),
+            # necessários para interpolar e alisar o rumo no navegador.
             return np.degrees(np.unwrap(np.radians(a)))
 
         # Limiares do aviso de proximidade: perigo de colisão (vermelho) e aviso de aproximação (amarelo) [m]
@@ -95,6 +97,9 @@ class MissionWebDashboard:
         danger_m = float(spatial_cfg.get("collision_threshold_m", 10.0))
         warning_m = max(danger_m, float(spatial_cfg.get("proximity_warning_m", 30.0)))
 
+        # O timeline é o único objeto que o JavaScript recebe: uma grelha de tempo fixa (dt_sample) e, por robô, uma
+        # série por grandeza (posição NED, ângulos, velocidades, incerteza), mais o relatório, a origem, os limiares
+        # e a malha 3D do submarino. O navegador só interpola entre amostras e desenha.
         timeline_dict = {
             "dt_step": dt_sample,
             "t0_base": min_t,
@@ -495,15 +500,26 @@ class MissionWebDashboard:
     </div>
 
     <script>
+        // =====================================================================================================
+        // MAPA DESTE FICHEIRO (JavaScript que corre no navegador)
+        // De onde vêm os dados: o Python faz as contas (ler os CSV, passar WGS-84 para NED, filtro de Kalman com
+        // suavizador RTS, ângulos, velocidades, relatório) e entrega ao navegador um único objeto, o timeline, numa
+        // grelha de tempo fixa de dt_step segundos. O JavaScript não recalcula a trajetória: interpola entre
+        // amostras e desenha.
+        // Convenções: N = Norte, E = Este, D = para baixo (profundidade positiva); ângulos em graus; tempos em
+        // segundos; f = índice fracionário na grelha (f = 12.5 fica a meio caminho entre as amostras 12 e 13).
+        // Blocos, por ordem: interpolação e geometria, cena 3D (Global e 3ª Pessoa), câmaras, radar e mini-cockpit,
+        // Cockpit (separador 3), previsão, relatório (separador 5), distâncias (separador 4), aviso e marcas de
+        // proximidade, controlos (botões, teclado, reprodução).
+        // =====================================================================================================
         const timeline = __TIMELINE_JSON__;
         const dt_step = timeline.dt_step;
         const t0_base = timeline.t0_base;
         const t_max = timeline.t_max;
         const numSteps = timeline.num_steps;
         const robotKeys = Object.keys(timeline.robots).sort();
+        // Fator para passar graus a radianos.
         const DEG = Math.PI / 180.0;
-        const FOV_F = 1.0 / Math.tan(35.0 * DEG);   // distância focal para FOV horizontal de 70 graus (u em [-1, 1])
-        const HALF_V = 0.5625;                       // meia-altura do ecrã (16:9)
 
         let currentView = 'global';
         let currentRobot = '__ACTIVE_ROBOT__';
@@ -513,27 +529,36 @@ class MissionWebDashboard:
         let animFrameId = null;
         let lastFrameTimestamp = null;
         let lastRender = 0;
-        let lastActiveKey = '';
 
         // ---------- utilitários de interpolação ----------
+        // Método: converter o tempo atual (segundos) num índice fracionário da grelha, dividindo por dt_step.
+        // Obtemos: o f que todas as outras funções usam para ler os dados do instante atual.
         function curF() {
             return Math.min(numSteps - 1, Math.max(0, (currentTime - t0_base) / dt_step));
         }
-        function at(arr, f) {
+        // Método: interpolação linear entre as duas amostras vizinhas (peso w = parte fracionária de f).
+        // Obtemos: o valor de qualquer série (E, N, D, yaw, velocidade...) num instante entre amostras.
+        function valueAt(arr, f) {
             const i = Math.floor(f);
             if (i >= arr.length - 1) return arr[arr.length - 1];
             const w = f - i;
             return arr[i] * (1 - w) + arr[i + 1] * w;
         }
+        // Obtemos: se o robô tem dados neste instante (os três robôs não começam nem acabam todos ao mesmo tempo).
         function isActive(r, f) { return f >= r.k0 && f <= r.k1; }
+        // Método: interpolar com valueAt() cada série do robô.
+        // Obtemos: posição NED, atitude (yaw, pitch, roll), velocidade estimada e taxa de viragem no instante f.
         function stateAt(r, f) {
             return {
-                E: at(r.E, f), N: at(r.N, f), D: at(r.D, f),
-                yaw: at(r.yaw, f), pitch: at(r.pitch, f), roll: at(r.roll, f),
-                spd: at(r.spd, f), turn: at(r.turn, f)
+                E: valueAt(r.E, f), N: valueAt(r.N, f), D: valueAt(r.D, f),
+                yaw: valueAt(r.yaw, f), pitch: valueAt(r.pitch, f), roll: valueAt(r.roll, f),
+                spd: valueAt(r.spd, f), turn: valueAt(r.turn, f)
             };
         }
         // Vetor no referencial do corpo (x frente, y direita, z baixo): R^T (ZYX) * (dN, dE, dD)
+        // Método: rodar um vetor do referencial NED para o referencial do corpo, com a transposta da matriz de
+        // rotação ZYX (yaw, pitch, roll). Entra o vetor (dN, dE, dD) de um robô ao outro.
+        // Obtemos: onde esse robô fica visto do nariz do primeiro (x frente, y direita, z baixo).
         function toBody(s, dN, dE, dD) {
             const psi = s.yaw * DEG, the = s.pitch * DEG, phi = s.roll * DEG;
             const cPsi = Math.cos(psi), sPsi = Math.sin(psi);
@@ -545,36 +570,17 @@ class MissionWebDashboard:
                 z: (cPhi * sThe * cPsi + sPhi * sPsi) * dN + (cPhi * sThe * sPsi - sPhi * cPsi) * dE + cPhi * cThe * dD
             };
         }
+        // Obtemos: segundos formatados como minutos e segundos (por exemplo 62m 9.0s).
         function fmtElapsed(sec) {
             const m = Math.floor(sec / 60);
             return m + 'm ' + (sec - 60 * m).toFixed(1) + 's';
         }
 
-        function computeSubmarineWireframe(e, n, d, yawDeg, pitchDeg, sc) {
-            const yaw = yawDeg * DEG, pitch = pitchDeg * DEG;
-            const k = sc || 1.0;
-            const length = 8.0 * k, wingspan = 3.5 * k, height = 2.5 * k;
-            const fe = Math.sin(yaw) * Math.cos(pitch);
-            const fn = Math.cos(yaw) * Math.cos(pitch);
-            const fd = -Math.sin(pitch);
-            const re = Math.cos(yaw), rn = -Math.sin(yaw), rd = 0.0;
-            const ue = Math.sin(yaw) * Math.sin(pitch);
-            const un = Math.cos(yaw) * Math.sin(pitch);
-            const ud = -Math.cos(pitch);
-            const nose_e = e + length * fe, nose_n = n + length * fn, nose_d = d + length * fd;
-            const stern_e = e - 0.5 * length * fe, stern_n = n - 0.5 * length * fn, stern_d = d - 0.5 * length * fd;
-            const port_e = stern_e - 0.5 * wingspan * re, port_n = stern_n - 0.5 * wingspan * rn, port_d = stern_d - 0.5 * wingspan * rd;
-            const stbd_e = stern_e + 0.5 * wingspan * re, stbd_n = stern_n + 0.5 * wingspan * rn, stbd_d = stern_d + 0.5 * wingspan * rd;
-            const rud_e = stern_e + height * ue, rud_n = stern_n + height * un, rud_d = stern_d + height * ud;
-            return {
-                x: [nose_e, stern_e, port_e, stbd_e, stern_e, rud_e, nose_e],
-                y: [nose_n, stern_n, port_n, stbd_n, stern_n, rud_n, nose_n],
-                z: [nose_d, stern_d, port_d, stbd_d, stern_d, rud_d, nose_d]
-            };
-        }
-
         // Eixos do corpo (x proa, y estibordo, z quilha) escritos no mundo NED = colunas de R = Rz(yaw) Ry(pitch) Rx(roll).
         // Devolve 3 vetores [N, E, D]; é a mesma matriz que toBody() usa transposta.
+        // Método: construir a matriz de rotação R = Rz(yaw) Ry(pitch) Rx(roll) e ler as suas colunas.
+        // Obtemos: os eixos x (proa), y (estibordo) e z (quilha) do robô escritos no mundo NED, que servem para
+        // desenhar as setas coloridas e para orientar a malha 3D do submarino.
         function bodyAxesNED(s) {
             const psi = s.yaw * DEG, the = s.pitch * DEG, phi = s.roll * DEG;
             const cPsi = Math.cos(psi), sPsi = Math.sin(psi);
@@ -589,6 +595,9 @@ class MissionWebDashboard:
 
         // ---------- Modelo 3D do submarino ----------
         // A malha (vértices no referencial do corpo) vem de Python. Aqui roda-se com roll, pitch e yaw e põe-se na posição do robot.
+        // Método: cada vértice da malha (guardada no referencial do corpo) é rodado pelas colunas de R e somado à
+        // posição do robô; o fator scale só aumenta ou diminui o casco.
+        // Obtemos: os vértices x, y, z do submarino no mundo, com a orientação real do robô naquele instante.
         function subMeshAt(s, scale) {
             const M = timeline.sub_mesh, ax = bodyAxesNED(s), n = M.x.length;
             const X = new Array(n), Y = new Array(n), Z = new Array(n);
@@ -601,6 +610,7 @@ class MissionWebDashboard:
             return { x: X, y: Y, z: Z };
         }
         // Cor do casco: a do robot, mais clara no robot selecionado
+        // Obtemos: a cor do casco (a do robô; o robô selecionado fica 12 por cento mais claro).
         function hullColor(id) {
             const c = timeline.robots[id].color.replace('#', '');
             const f = (id === currentRobot) ? 0.12 : 0.0;
@@ -611,15 +621,20 @@ class MissionWebDashboard:
         // ---------- Cena 3D (Vista Global e Vista 3ª Pessoa partilham o mesmo código) ----------
         const lastKeys = {};
         let frameCount = 0;
-        function updateScene(gdId, f, pov) {
+        // Método: reescrever com Plotly.restyle só as coordenadas dos traços que mudam (mais leve do que refazer o
+        // gráfico). Ordem dos traços: 0 superfície, 1 fundo, 2+3i rasto, 3+3i marcador, 4+3i casco,
+        // 2+3N+i rota completa, 2+4N+3i+a setas dos eixos, 2+7N+i previsão (i = robô, N = nº de robôs).
+        // Obtemos: a cena 3D no instante f, igual para a Vista Global e para a 3ª Pessoa (thirdPerson = true
+        // põe os cascos 1.5 vezes maiores e liga a câmara de 3ª pessoa).
+        function updateScene(gdId, f, thirdPerson) {
             const gd = document.getElementById(gdId);
             if (!gd || !gd.data) return;
             frameCount++;
-            const hull = pov ? 1.5 : 1.0;           // na 3ª pessoa os cascos são desenhados um pouco maiores
-            const idx = [], X = [], Y = [], Z = [];
+            const hull = thirdPerson ? 1.5 : 1.0;           // na 3ª pessoa os cascos são desenhados um pouco maiores
+            const traceIdx = [], X = [], Y = [], Z = [];
             const i0 = Math.floor(f);
-            const flags = [];
-            const mkIdx = [], mkOpacity = [], mkText = [], wfOpacity = [], wfIdx = [];
+            const activeFlags = [];
+            const markerTraceIdx = [], markerOpacity = [], markerText = [], fadeOpacity = [], fadeTraceIdx = [];
             const axisBase = 2 + 4 * robotKeys.length;      // as setas dos eixos vêm depois das rotas completas
             const predBase = 2 + 7 * robotKeys.length;      // as linhas de previsão vêm depois das setas
 
@@ -627,55 +642,54 @@ class MissionWebDashboard:
                 const r = timeline.robots[id];
                 const s = stateAt(r, f);
                 const act = isActive(r, f);
-                const self = false;                        // na 3ª pessoa o próprio robô é visível
-                const own = pov && id === currentRobot;    // o robô seguido pela câmara da 3ª pessoa
-                flags.push(act ? 1 : 0);
+                const own = thirdPerson && id === currentRobot;    // o robô seguido pela câmara da 3ª pessoa
+                activeFlags.push(act ? 1 : 0);
 
                 // Rasto progressivo: só a parte já percorrida pelo robô
                 const sIdx = Math.max(0, Math.floor(r.k0));
                 const eIdx = Math.max(sIdx, Math.min(i0, Math.ceil(r.k1)));
                 const tx = r.E.slice(sIdx, eIdx + 1), ty = r.N.slice(sIdx, eIdx + 1), tz = r.D.slice(sIdx, eIdx + 1);
                 if (act) { tx.push(s.E); ty.push(s.N); tz.push(s.D); }
-                idx.push(2 + 3 * i); X.push(tx); Y.push(ty); Z.push(tz);
+                traceIdx.push(2 + 3 * i); X.push(tx); Y.push(ty); Z.push(tz);
 
-                idx.push(3 + 3 * i); X.push([s.E]); Y.push([s.N]); Z.push([s.D - 2.2 * hull]);
-                const g = subMeshAt(s, hull);
-                idx.push(4 + 3 * i); X.push(g.x); Y.push(g.y); Z.push(g.z);
+                traceIdx.push(3 + 3 * i); X.push([s.E]); Y.push([s.N]); Z.push([s.D - 2.2 * hull]);
+                const mesh = subMeshAt(s, hull);
+                traceIdx.push(4 + 3 * i); X.push(mesh.x); Y.push(mesh.y); Z.push(mesh.z);
 
                 // Eixos x, y, z colados ao robô: rodam com roll, pitch e yaw
                 const axes = bodyAxesNED(s), L = timeline.axis_length_m;
                 for (let a = 0; a < 3; a++) {
-                    idx.push(axisBase + 3 * i + a);
+                    traceIdx.push(axisBase + 3 * i + a);
                     X.push([s.E, s.E + L * axes[a][1]]);
                     Y.push([s.N, s.N + L * axes[a][0]]);
                     Z.push([s.D, s.D + L * axes[a][2]]);
-                    wfIdx.push(axisBase + 3 * i + a); wfOpacity.push(self ? 0.0 : (act ? 1.0 : 0.25));
+                    fadeTraceIdx.push(axisBase + 3 * i + a); fadeOpacity.push((act ? 1.0 : 0.25));
                 }
 
                 // Previsão em linha reta com a velocidade estimada, durante PRED_H segundos (pára à superfície)
-                idx.push(predBase + i);
+                traceIdx.push(predBase + i);
                 if (act && predictOn) {
-                    const pvN = at(r.vN, f), pvE = at(r.vE, f), pvD = at(r.vD, f);
-                    let hh = PRED_H;
-                    if (pvD < 0 && s.D + hh * pvD < 0) hh = Math.max(0, -s.D / pvD);
-                    X.push([s.E, s.E + hh * pvE]); Y.push([s.N, s.N + hh * pvN]); Z.push([s.D, s.D + hh * pvD]);
+                    const pvN = valueAt(r.vN, f), pvE = valueAt(r.vE, f), pvD = valueAt(r.vD, f);
+                    let horizonS = PRED_H;
+                    if (pvD < 0 && s.D + horizonS * pvD < 0) horizonS = Math.max(0, -s.D / pvD);
+                    X.push([s.E, s.E + horizonS * pvE]); Y.push([s.N, s.N + horizonS * pvN]); Z.push([s.D, s.D + horizonS * pvD]);
                 } else { X.push([]); Y.push([]); Z.push([]); }
 
-                mkIdx.push(3 + 3 * i); mkOpacity.push(self ? 0.0 : (act ? 1.0 : 0.25));
+                markerTraceIdx.push(3 + 3 * i); markerOpacity.push((act ? 1.0 : 0.25));
                 // o robô seguido já tem o painel de estatísticas: não repete a etiqueta na cena
-                mkText.push([own ? '' : (act ? ('<b>' + id + '</b><br>' + s.spd.toFixed(1) + ' m/s') : ('<b>' + id + '</b><br>inativo'))]);
-                wfIdx.push(4 + 3 * i); wfOpacity.push(self ? 0.0 : (act ? 1.0 : 0.25));
+                markerText.push([own ? '' : (act ? ('<b>' + id + '</b><br>' + s.spd.toFixed(1) + ' m/s') : ('<b>' + id + '</b><br>inativo'))]);
+                fadeTraceIdx.push(4 + 3 * i); fadeOpacity.push((act ? 1.0 : 0.25));
             });
-            Plotly.restyle(gd, { x: X, y: Y, z: Z }, idx);
+            Plotly.restyle(gd, { x: X, y: Y, z: Z }, traceIdx);
 
-            const key = flags.join('') + (pov ? currentRobot : '');
+            const key = activeFlags.join('') + (thirdPerson ? currentRobot : '');
             if (key !== lastKeys[gdId] || (frameCount % 8) === 0) {
                 lastKeys[gdId] = key;
-                Plotly.restyle(gd, { 'marker.opacity': mkOpacity, text: mkText }, mkIdx);
-                Plotly.restyle(gd, { opacity: wfOpacity }, wfIdx);
+                Plotly.restyle(gd, { 'marker.opacity': markerOpacity, text: markerText }, markerTraceIdx);
+                Plotly.restyle(gd, { opacity: fadeOpacity }, fadeTraceIdx);
             }
 
-            if (pov) setThirdPersonCamera(gd, f);
+            if (thirdPerson) setThirdPersonCamera(gd, f);
             else if (followOn) followCamera(gd, f);
         }
 
@@ -683,16 +697,20 @@ class MissionWebDashboard:
         // O centro da câmara fica no robô (a cada instante) e o olho mantém o afastamento (eye - center) que o
         // utilizador escolheu com o rato (rodar e zoom). Coordenadas da câmara = (E - cE, N - cN, -(D - cD)) / span.
         const FOLLOW_DIST_M = 45.0;                  // afastamento inicial ao robô [m]
-        const FOLLOW_DIR = [-0.62, -0.62, 0.48];     // direção do olho: sudoeste e acima (E, N, para cima)
+        const FOLLOW_DIRECTION = [-0.62, -0.62, 0.48];     // direção do olho: sudoeste e acima (E, N, para cima)
         let followOn = false;
         let followCamSet = false;                    // já aplicámos a câmara de seguimento nesta sessão de seguimento?
         let camOffset = null;                        // eye - center, em unidades da câmara do Plotly
 
+        // Obtemos: o afastamento inicial entre olho e robô na câmara de seguimento, em unidades do Plotly.
         function defaultFollowOffset() {
             const k = FOLLOW_DIST_M / timeline.scene.span;
-            return { x: FOLLOW_DIR[0] * k, y: FOLLOW_DIR[1] * k, z: FOLLOW_DIR[2] * k };
+            return { x: FOLLOW_DIRECTION[0] * k, y: FOLLOW_DIRECTION[1] * k, z: FOLLOW_DIRECTION[2] * k };
         }
 
+        // Método: pôr o centro da câmara no robô a cada instante e manter o afastamento (olho menos centro) que o
+        // utilizador escolheu com o rato; o afastamento é relido da câmara real antes de cada atualização.
+        // Obtemos: uma câmara que segue o robô sem perder o zoom e a rotação que o utilizador deu.
         function followCamera(gd, f) {
             const r = timeline.robots[currentRobot];
             if (!r) return;
@@ -711,18 +729,21 @@ class MissionWebDashboard:
             followCamSet = true;
         }
 
+        // Obtemos: liga ou desliga o modo seguir e acerta o aspeto do botão.
         function setFollow(on) {
             followOn = on;
             followCamSet = false;
             document.getElementById('btn-follow').classList.toggle('active', on);
         }
 
+        // Obtemos: o atalho F (alterna seguir e vista geral).
         function toggleFollow() {
             setFollow(!followOn);
             updateFrame(curF());
         }
 
         // Volta à vista de cima com os 3 robôs (câmara por omissão do Plotly)
+        // Obtemos: o atalho G (volta à vista de cima com os três robôs).
         function overviewCamera() {
             setFollow(false);
             const gd = document.getElementById('plot-global');
@@ -742,13 +763,18 @@ class MissionWebDashboard:
         const TP_SMOOTH_STEPS = 3;                                     // nº de amostras (de dt_step s) para alisar o rumo
         const tpCam = { dist: TP_DEFAULT.dist, elev: TP_DEFAULT.elev, orbit: TP_DEFAULT.orbit };
 
+        // Método: média do rumo nas últimas amostras (os ângulos já vêm desenrolados, por isso a média é válida).
+        // Obtemos: um rumo sem tremor, para a câmara de 3ª pessoa não abanar com o balanço do robô.
         function smoothedYaw(r, f) {
             // média do rumo nas últimas amostras (os ângulos vêm 'unwrapped', por isso a média é válida)
             let sum = 0.0, n = 0;
-            for (let j = 0; j <= TP_SMOOTH_STEPS; j++) { sum += at(r.yaw, Math.max(0, f - j)); n++; }
+            for (let j = 0; j <= TP_SMOOTH_STEPS; j++) { sum += valueAt(r.yaw, Math.max(0, f - j)); n++; }
             return sum / n;
         }
 
+        // Método: trigonometria simples. Olho = posição do robô recuada pela proa (distância vezes cosseno
+        // da elevação) e subida (distância vezes seno da elevação); alvo = ponto um pouco à frente da proa.
+        // Obtemos: a câmara atrás e acima do robô selecionado, já no sistema de coordenadas do Plotly.
         function setThirdPersonCamera(gd, f) {
             const act = timeline.robots[currentRobot];
             if (!act) return;
@@ -815,6 +841,7 @@ class MissionWebDashboard:
         const RADAR_TRAIL_STEPS = 60;        // rasto no radar: últimas 60 amostras (2 min com dt = 2 s)
         let radarLoopId = null, lastStatsUpdate = 0;
 
+        // Obtemos: passa ao alcance seguinte ou anterior do radar (50, 100, 250, 500 ou 1000 m).
         function changeRadarRange(step) {
             const i = Math.min(RADAR_RANGES.length - 1, Math.max(0, RADAR_RANGES.indexOf(radarRange) + step));
             radarRange = RADAR_RANGES[i];
@@ -822,6 +849,8 @@ class MissionWebDashboard:
         }
 
         // Posição relativa no plano horizontal com a proa para cima: frente = (dN, dE) projetado na proa
+        // Método: rodar o vetor (dN, dE) pelo rumo do robô, com um produto escalar para cada eixo.
+        // Obtemos: quanto o outro robô está à frente (fwd) e à direita (right), para o radar ter a proa para cima.
         function relHeadingUp(psiRad, dN, dE) {
             return { fwd: Math.cos(psiRad) * dN + Math.sin(psiRad) * dE, right: -Math.sin(psiRad) * dN + Math.cos(psiRad) * dE };
         }
@@ -834,6 +863,9 @@ class MissionWebDashboard:
             ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y); ctx.closePath();
         }
 
+        // Método: converter cada robô para (frente, direita) com relHeadingUp, multiplicar pelos píxeis por metro
+        // (raio útil dividido pelo alcance) e desenhar no canvas 2D.
+        // Obtemos: um radar centrado no robô selecionado, com a proa para cima, rasto, Δ de profundidade e distância.
         function drawRadar(f, nowMs) {
             const cv = document.getElementById('tp-radar-canvas');
             if (!cv) return;
@@ -1007,6 +1039,8 @@ class MissionWebDashboard:
 
         // ---------- Mini-cockpit: as mesmas grandezas e escalas da página Cockpit ----------
         // Conta-quilómetros de ponteiro (velocidades): arco de 240°, marcas, zonas coloridas e uma seta que aponta o valor
+        // Método: mapear o valor numa fração do arco de 240 graus (frac) e daí num ângulo (angOf).
+        // Obtemos: um mostrador de ponteiro (velocidade e rotação) com as mesmas escalas do separador Cockpit.
         function drawNeedleGauge(id, o) {
             const cv = document.getElementById(id);
             if (!cv) return;
@@ -1016,7 +1050,7 @@ class MissionWebDashboard:
             const A0 = 150 * DEG, SWEEP = 240 * DEG;                   // do canto inferior esquerdo ao inferior direito
             const frac = (v) => (Math.min(o.max, Math.max(o.min, v)) - o.min) / (o.max - o.min);
             const angOf = (v) => A0 + frac(v) * SWEEP;
-            const P = (a, rr) => [cx + rr * Math.cos(a), cy + rr * Math.sin(a)];
+            const polar = (a, rr) => [cx + rr * Math.cos(a), cy + rr * Math.sin(a)];
             ctx.clearRect(0, 0, W, H);
             ctx.lineCap = 'butt';
             // mostrador
@@ -1031,18 +1065,18 @@ class MissionWebDashboard:
             // marcas pequenas e grandes
             for (let v = o.min; v <= o.max + 1e-9; v += o.minor) {
                 const a = angOf(v), major = o.ticks.some(t => Math.abs(t - v) < 1e-6);
-                const [x0, y0] = P(a, r - (major ? 14 : 8)), [x1, y1] = P(a, r - 3);
+                const [x0, y0] = polar(a, r - (major ? 14 : 8)), [x1, y1] = polar(a, r - 3);
                 ctx.strokeStyle = major ? '#e2e8f0' : '#64748b'; ctx.lineWidth = major ? 3 : 2;
                 ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
             }
             ctx.fillStyle = '#cbd5e1'; ctx.font = '16px Segoe UI, Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-            o.ticks.forEach(t => { const [x, y] = P(angOf(t), r + 20); ctx.fillText(String(t), x, y); });
+            o.ticks.forEach(t => { const [x, y] = polar(angOf(t), r + 20); ctx.fillText(String(t), x, y); });
             // ponteiro em forma de seta
             if (o.value !== null) {
-                const a = angOf(o.value), [tx, ty] = P(a, r - 6);
+                const a = angOf(o.value), [tx, ty] = polar(a, r - 6);
                 const n = [Math.cos(a + Math.PI / 2), Math.sin(a + Math.PI / 2)];
-                const [bx, by] = P(a + Math.PI, 12);                      // cauda do ponteiro, do outro lado do eixo
-                const [hx, hy] = P(a, r - 22);                            // base da ponta da seta
+                const [bx, by] = polar(a + Math.PI, 12);                      // cauda do ponteiro, do outro lado do eixo
+                const [hx, hy] = polar(a, r - 22);                            // base da ponta da seta
                 ctx.fillStyle = o.color; ctx.strokeStyle = '#0b0f19'; ctx.lineWidth = 1.5;
                 ctx.beginPath();
                 ctx.moveTo(bx + n[0] * 3, by + n[1] * 3);
@@ -1066,6 +1100,8 @@ class MissionWebDashboard:
 
         // Profundímetro de coluna: tubo vertical (superfície em cima, fundo em baixo) com a água a encher até à
         // profundidade atual; a barra desce quando o robô mergulha e sobe quando ele vem à superfície.
+        // Método: mapear a profundidade na altura de um tubo (yOf) e mostrar a seta da velocidade vertical.
+        // Obtemos: a barra de profundidade com o limite de aviso e a tendência (a subir ou a descer).
         function drawDepthBar(id, depth, maxDepth, warnDepth, vz, active) {
             const cv = document.getElementById(id);
             if (!cv) return;
@@ -1122,6 +1158,8 @@ class MissionWebDashboard:
         }
 
         // Horizonte artificial: céu/mar rodados pelo roll e deslocados pelo pitch, com o símbolo fixo do veículo
+        // Método: rodar o desenho por menos o roll e deslocá-lo conforme o pitch.
+        // Obtemos: um horizonte artificial como o de um avião, onde se vê a inclinação do robô.
         function drawHorizon(id, roll, pitch, active) {
             const cv = document.getElementById(id);
             if (!cv) return;
@@ -1155,6 +1193,7 @@ class MissionWebDashboard:
             ctx.fillText(active ? sg(roll) : '–', tx, cy - 4); ctx.fillText(active ? sg(pitch) : '–', tx, cy + 52);
         }
 
+        // Obtemos: atualiza os quatro instrumentos do mini-cockpit da 3ª Pessoa e o cabeçalho do robô.
         function updateCockpitPanel(f) {
             const me = timeline.robots[currentRobot];
             const s = stateAt(me, f);
@@ -1167,7 +1206,7 @@ class MissionWebDashboard:
 
             // escalas iguais às da página Cockpit original (velocidade, viragem, profundidade)
             // velocidade vertical (derivada da profundidade, positiva = a descer) para a seta de tendência
-            const vz = (at(me.D, Math.min(numSteps - 1, f + 0.5)) - at(me.D, Math.max(0, f - 0.5))) / dt_step;
+            const vz = (valueAt(me.D, Math.min(numSteps - 1, f + 0.5)) - valueAt(me.D, Math.max(0, f - 0.5))) / dt_step;
             drawDepthBar('tpk-depth', s.D, 35, 32, vz, act);
             drawNeedleGauge('tpk-spd', { value: act ? s.spd : null, min: -0.5, max: 3.0, minor: 0.25, ticks: [0, 1, 2, 3],
                 zones: [{ from: -0.5, to: 0.0, color: '#9b2226' }],
@@ -1188,6 +1227,8 @@ class MissionWebDashboard:
         }
         window.addEventListener('resize', fitThirdPersonOverlays);
 
+        // Método: ciclo com requestAnimationFrame, independente do Plotly.
+        // Obtemos: radar fluido (cerca de 60 imagens por segundo) e mini-cockpit a 10 atualizações por segundo.
         function thirdPersonOverlayLoop(nowMs) {
             if (currentView !== 'pov') { radarLoopId = null; return; }
             const f = curF();
@@ -1205,103 +1246,125 @@ class MissionWebDashboard:
         // Painel de instrumentos em SVG, alimentado pela mesma linha temporal das outras vistas. Mostra o que interessa
         // para navegar: atitude e eixos do corpo, rumo e rota, velocidade medida contra estimada, vizinhos no
         // referencial do corpo (azimute, elevação, distância, TCPA, CPA), profundidade e saltos de posição.
-        const CK = { cy: '#27c3dd', ink: '#e6edf7', ink2: '#9db0cc', mut: '#6d83a6', line: '#1d2f4d', red: '#ff5a67', green: '#3fbf86', amber: '#e8a838', blue: '#4ea1ff' };
-        const ckNum = (x, d) => { if (x === null || x === undefined || isNaN(x)) return '–'; const t = x.toFixed(d); return (t.charAt(0) === '-' && parseFloat(t) === 0) ? t.substring(1) : t; };
-        const ckN1 = (x) => ckNum(x, 1);
-        const ckN2 = (x) => ckNum(x, 2);
-        const ckW360 = (a) => ((a % 360) + 360) % 360;
-        const ckW180 = (a) => (((a + 180) % 360) + 360) % 360 - 180;
-        const ckDepthPaths = {};
+        // Cores partilhadas por todos os painéis do Cockpit.
+        const COCKPIT_COLORS = { cy: '#27c3dd', ink: '#e6edf7', ink2: '#9db0cc', mut: '#6d83a6', line: '#1d2f4d', red: '#ff5a67', green: '#3fbf86', amber: '#e8a838', blue: '#4ea1ff' };
+        // Obtemos: número com casas decimais, traço quando não existe, e sem o sinal de menos em zero (-0.0).
+        const formatNumber = (x, d) => { if (x === null || x === undefined || isNaN(x)) return '–'; const t = x.toFixed(d); return (t.charAt(0) === '-' && parseFloat(t) === 0) ? t.substring(1) : t; };
+        const fmt1 = (x) => formatNumber(x, 1);
+        const fmt2 = (x) => formatNumber(x, 2);
+        // Método: resto da divisão por 360 corrigido para positivo.
+        // Obtemos: um ângulo entre 0 e 360 (rumo).
+        const wrap360 = (a) => ((a % 360) + 360) % 360;
+        // Método: deslocar 180, resto da divisão por 360, voltar a deslocar.
+        // Obtemos: um ângulo entre -180 e 180 (diferenças de rumo).
+        const wrap180 = (a) => (((a + 180) % 360) + 360) % 360 - 180;
+        const depthPathCache = {};
 
         // Estado completo de um robô no instante f (posição, atitude, velocidades estimadas e medidas, incerteza)
-        function ckState(r, f) {
+        // Método: stateAt() mais as velocidades (estimada NED, medida no corpo) e a incerteza do filtro.
+        // Obtemos: tudo o que o Cockpit precisa de um robô num instante.
+        function fullStateAt(r, f) {
             const s = stateAt(r, f);
-            s.vN = at(r.vN, f); s.vE = at(r.vE, f); s.vD = at(r.vD, f);
-            s.u = at(r.u, f); s.v = at(r.v, f); s.w = at(r.w, f); s.sig = at(r.sig, f);
+            s.vN = valueAt(r.vN, f); s.vE = valueAt(r.vE, f); s.vD = valueAt(r.vD, f);
+            s.u = valueAt(r.u, f); s.v = valueAt(r.v, f); s.w = valueAt(r.w, f); s.sig = valueAt(r.sig, f);
             return s;
         }
         // Matriz de rotação corpo para NED (colunas = eixos x, y, z do corpo em NED, a mesma de bodyAxesNED)
-        function ckMatrix(s) {
+        // Obtemos: a matriz de rotação corpo para NED, com as colunas de bodyAxesNED.
+        function rotationMatrix(s) {
             const ax = bodyAxesNED(s);
             return [[ax[0][0], ax[1][0], ax[2][0]], [ax[0][1], ax[1][1], ax[2][1]], [ax[0][2], ax[1][2], ax[2][2]]];
         }
-        function ckQuat(s) {
+        // Método: fórmula padrão de ângulos de Euler ZYX para quaternião (metades dos ângulos).
+        // Obtemos: o quaternião (w, x, y, z), que é o formato em que o robô regista a orientação no CSV.
+        function quaternionOf(s) {
             const cr = Math.cos(s.roll * DEG / 2), sr = Math.sin(s.roll * DEG / 2);
             const cp = Math.cos(s.pitch * DEG / 2), sp = Math.sin(s.pitch * DEG / 2);
-            const yw = ckW180(s.yaw);   // o yaw da linha temporal vem desenrolado (pode passar de 360°): q com w positivo
+            const yw = wrap180(s.yaw);   // o yaw da linha temporal vem desenrolado (pode passar de 360°): q com w positivo
             const cy = Math.cos(yw * DEG / 2), sy = Math.sin(yw * DEG / 2);
             return { w: cr * cp * cy + sr * sp * sy, x: sr * cp * cy - cr * sp * sy, y: cr * sp * cy + sr * cp * sy, z: cr * cp * sy - sr * sp * cy };
         }
-        function ckLine(a, b, c, w, dash) {
+        // Obtemos: o texto SVG de uma linha (usado em todos os painéis do Cockpit).
+        function svgLine(a, b, c, w, dash) {
             return '<line x1="' + a[0].toFixed(1) + '" y1="' + a[1].toFixed(1) + '" x2="' + b[0].toFixed(1) + '" y2="' + b[1].toFixed(1) +
                 '" stroke="' + c + '" stroke-width="' + w + '"' + (dash ? ' stroke-dasharray="3 3"' : '') + ' stroke-linecap="round"/>';
         }
-        function ckPanel(cls, title, body) { return '<div class="ck-pn ' + cls + '"><h4>' + title + '</h4>' + body + '</div>'; }
+        // Obtemos: a moldura HTML de um painel do Cockpit (título e conteúdo).
+        function panelHtml(cls, title, body) { return '<div class="ck-pn ' + cls + '"><h4>' + title + '</h4>' + body + '</div>'; }
 
-        function ckAttitude(s) {
-            const M = ckMatrix(s), q = ckQuat(s);
+        // Método: projetar em 2D (perspetiva fixa, com Este para a direita e Norte para dentro) um casco simples
+        // rodado pela matriz de rotação. Roll, pitch e yaw aparecem em destaque, cada um com a sua explicação.
+        // Obtemos: a atitude do robô desenhada e explicada.
+        function attitudePanel(s) {
+            const M = rotationMatrix(s), q = quaternionOf(s);
             const A = 35 * DEG, E = 26 * DEG, cx = 150, cy = 118, S = 54;
-            const mulM = (p) => [M[0][0] * p[0] + M[0][1] * p[1] + M[0][2] * p[2], M[1][0] * p[0] + M[1][1] * p[1] + M[1][2] * p[2], M[2][0] * p[0] + M[2][1] * p[1] + M[2][2] * p[2]];
-            const proj = (p) => {   // p em NED: ecrã com Este para a direita, Norte para dentro, Cima = -D
+            const rotateByBody = (p) => [M[0][0] * p[0] + M[0][1] * p[1] + M[0][2] * p[2], M[1][0] * p[0] + M[1][1] * p[1] + M[1][2] * p[2], M[2][0] * p[0] + M[2][1] * p[1] + M[2][2] * p[2]];
+            const projectNed = (p) => {   // p em NED: ecrã com Este para a direita, Norte para dentro, Cima = -D
                 const x = p[1], y = p[0], z = -p[2];
                 const xr = x * Math.cos(A) - y * Math.sin(A), yr = x * Math.sin(A) + y * Math.cos(A);
                 return [cx + S * xr, cy - S * (z * Math.cos(E) + yr * Math.sin(E))];
             };
-            const B = (p) => proj(mulM(p));
+            const bodyToScreen = (p) => projectNed(rotateByBody(p));
             const tail = [[-1.5, -.35, -.25], [-1.5, .35, -.25], [-1.5, .35, .25], [-1.5, -.35, .25]];
             const mid = [[.6, -.35, -.25], [.6, .35, -.25], [.6, .35, .25], [.6, -.35, .25]];
             const nose = [1.5, 0, 0];
             let g = '<svg viewBox="0 0 300 236" role="img">';
             [['N', [2.1, 0, 0]], ['E', [0, 2.1, 0]], ['D', [0, 0, 2.1]]].forEach(function (a) {
-                const o = proj([0, 0, 0]), e = proj(a[1]);
-                g += ckLine(o, e, '#4b6288', 1, true) + '<text x="' + (e[0] + 4) + '" y="' + (e[1] + 4) + '" font-size="10" fill="' + CK.mut + '" font-family="monospace">' + a[0] + '</text>';
+                const o = projectNed([0, 0, 0]), e = projectNed(a[1]);
+                g += svgLine(o, e, '#4b6288', 1, true) + '<text x="' + (e[0] + 4) + '" y="' + (e[1] + 4) + '" font-size="10" fill="' + COCKPIT_COLORS.mut + '" font-family="monospace">' + a[0] + '</text>';
             });
-            [tail, mid].forEach(function (P) { for (let k = 0; k < 4; k++) g += ckLine(B(P[k]), B(P[(k + 1) % 4]), '#7f93b5', 1.4); });
-            for (let k = 0; k < 4; k++) g += ckLine(B(tail[k]), B(mid[k]), '#7f93b5', 1.4) + ckLine(B(mid[k]), B(nose), '#9db0cc', 1.4);
-            [['x', [2.2, 0, 0], CK.red], ['y', [0, 1.5, 0], CK.green], ['z', [0, 0, 1.5], CK.blue]].forEach(function (a) {
-                const o = B([0, 0, 0]), e = B(a[1]);
-                g += ckLine(o, e, a[2], 2.4) + '<circle cx="' + e[0].toFixed(1) + '" cy="' + e[1].toFixed(1) + '" r="3" fill="' + a[2] + '"/><text x="' + (e[0] + 6).toFixed(1) + '" y="' + (e[1] + 4).toFixed(1) + '" font-size="12" font-weight="700" fill="' + a[2] + '" font-family="monospace">' + a[0] + '</text>';
+            [tail, mid].forEach(function (face) { for (let k = 0; k < 4; k++) g += svgLine(bodyToScreen(face[k]), bodyToScreen(face[(k + 1) % 4]), '#7f93b5', 1.4); });
+            for (let k = 0; k < 4; k++) g += svgLine(bodyToScreen(tail[k]), bodyToScreen(mid[k]), '#7f93b5', 1.4) + svgLine(bodyToScreen(mid[k]), bodyToScreen(nose), '#9db0cc', 1.4);
+            [['x', [2.2, 0, 0], COCKPIT_COLORS.red], ['y', [0, 1.5, 0], COCKPIT_COLORS.green], ['z', [0, 0, 1.5], COCKPIT_COLORS.blue]].forEach(function (a) {
+                const o = bodyToScreen([0, 0, 0]), e = bodyToScreen(a[1]);
+                g += svgLine(o, e, a[2], 2.4) + '<circle cx="' + e[0].toFixed(1) + '" cy="' + e[1].toFixed(1) + '" r="3" fill="' + a[2] + '"/><text x="' + (e[0] + 6).toFixed(1) + '" y="' + (e[1] + 4).toFixed(1) + '" font-size="12" font-weight="700" fill="' + a[2] + '" font-family="monospace">' + a[0] + '</text>';
             });
             g += '</svg>';
             const att = function (name, val, sub, color) {
                 return '<div class="ck-at"><div class="k">' + name + '</div><div class="v" style="color:' + color + '">' + val + '</div><div class="d">' + sub + '</div></div>';
             };
-            return ckPanel('ck-c3', 'Atitude e eixos do corpo', g +
+            return panelHtml('ck-c3', 'Atitude e eixos do corpo', g +
                 '<div class="ck-att3">' +
-                att('Rolamento (roll)', ckN1(s.roll) + '°', 'Inclinação para os lados, em torno do eixo x. Positivo: o lado direito desce.', CK.red) +
-                att('Arfagem (pitch)', ckN1(s.pitch) + '°', 'Nariz para cima ou para baixo, em torno do eixo y. Positivo: nariz para cima.', CK.green) +
-                att('Guinada (yaw)', ckN1(ckW180(s.yaw)) + '°', 'Para onde aponta o nariz, em torno do eixo z (rumo ' + ckN1(ckW360(s.yaw)) + '°). Positivo: nariz para a direita.', CK.blue) +
+                att('Rolamento (roll)', fmt1(s.roll) + '°', 'Inclinação para os lados, em torno do eixo x. Positivo: o lado direito desce.', COCKPIT_COLORS.red) +
+                att('Arfagem (pitch)', fmt1(s.pitch) + '°', 'Nariz para cima ou para baixo, em torno do eixo y. Positivo: nariz para cima.', COCKPIT_COLORS.green) +
+                att('Guinada (yaw)', fmt1(wrap180(s.yaw)) + '°', 'Para onde aponta o nariz, em torno do eixo z (rumo ' + fmt1(wrap360(s.yaw)) + '°). Positivo: nariz para a direita.', COCKPIT_COLORS.blue) +
                 '</div>' +
                 '<div class="ck-ro"><span>quaternion q = (<b>' + q.w.toFixed(3) + '</b>, ' + q.x.toFixed(3) + ', ' + q.y.toFixed(3) + ', ' + q.z.toFixed(3) + ')</span></div>');
         }
 
-        function ckCompass(s) {
+        // Método: o rumo (heading) vem do quaternião; a rota (course) é a direção da velocidade estimada, com
+        // atan2(vE, vN), e só se mostra acima de 0.3 m por segundo; a deriva é rota menos rumo.
+        // Obtemos: a bússola com o nariz (rumo), a direção em que realmente anda (rota) e o desvio entre os dois.
+        function compassPanel(s) {
             const spd = Math.hypot(s.vN, s.vE);
-            const cog = spd > 0.3 ? ckW360(Math.atan2(s.vE, s.vN) / DEG) : null;   // rota sobre o fundo, só quando anda
+            const cog = spd > 0.3 ? wrap360(Math.atan2(s.vE, s.vN) / DEG) : null;   // rota sobre o fundo, só quando anda
             const cx = 110, cy = 104, R = 78;
-            const pt = (a, rr) => [cx + rr * Math.sin(a * DEG), cy - rr * Math.cos(a * DEG)];
+            const polar = (a, rr) => [cx + rr * Math.sin(a * DEG), cy - rr * Math.cos(a * DEG)];
             let g = '<svg viewBox="0 0 220 208" role="img"><circle cx="' + cx + '" cy="' + cy + '" r="' + R + '" fill="#0a1220" stroke="#27406a" stroke-width="1.5"/>';
             for (let a = 0; a < 360; a += 10) {
-                const m = a % 90 === 0, p1 = pt(a, R), p2 = pt(a, R - (m ? 12 : (a % 30 === 0 ? 8 : 4)));
-                g += ckLine(p1, p2, m ? '#9db0cc' : '#4b6288', m ? 1.8 : 1);
+                const m = a % 90 === 0, p1 = polar(a, R), p2 = polar(a, R - (m ? 12 : (a % 30 === 0 ? 8 : 4)));
+                g += svgLine(p1, p2, m ? '#9db0cc' : '#4b6288', m ? 1.8 : 1);
             }
             [['N', 0], ['E', 90], ['S', 180], ['O', 270]].forEach(function (c) {
-                const p = pt(c[1], R - 24);
-                g += '<text x="' + p[0].toFixed(1) + '" y="' + (p[1] + 5).toFixed(1) + '" text-anchor="middle" font-size="14" font-weight="700" fill="' + (c[0] === 'N' ? CK.red : CK.ink) + '">' + c[0] + '</text>';
+                const p = polar(c[1], R - 24);
+                g += '<text x="' + p[0].toFixed(1) + '" y="' + (p[1] + 5).toFixed(1) + '" text-anchor="middle" font-size="14" font-weight="700" fill="' + (c[0] === 'N' ? COCKPIT_COLORS.red : COCKPIT_COLORS.ink) + '">' + c[0] + '</text>';
             });
             if (cog !== null) {
-                const p = pt(cog, R - 8);
-                g += '<line x1="' + cx + '" y1="' + cy + '" x2="' + p[0].toFixed(1) + '" y2="' + p[1].toFixed(1) + '" stroke="' + CK.amber + '" stroke-width="2.4" stroke-dasharray="5 3"/><circle cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) + '" r="4.5" fill="' + CK.amber + '"/>';
+                const p = polar(cog, R - 8);
+                g += '<line x1="' + cx + '" y1="' + cy + '" x2="' + p[0].toFixed(1) + '" y2="' + p[1].toFixed(1) + '" stroke="' + COCKPIT_COLORS.amber + '" stroke-width="2.4" stroke-dasharray="5 3"/><circle cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) + '" r="4.5" fill="' + COCKPIT_COLORS.amber + '"/>';
             }
-            const tip = pt(s.yaw, R - 6), l = pt(s.yaw + 150, 16), rr = pt(s.yaw - 150, 16);
-            g += '<polygon points="' + tip[0].toFixed(1) + ',' + tip[1].toFixed(1) + ' ' + l[0].toFixed(1) + ',' + l[1].toFixed(1) + ' ' + cx + ',' + cy + ' ' + rr[0].toFixed(1) + ',' + rr[1].toFixed(1) + '" fill="' + CK.cy + '" opacity=".92"/></svg>';
-            const beta = cog === null ? null : ckW180(cog - ckW360(s.yaw));
-            return ckPanel('ck-c3', 'Bússola: rumo e rota', g +
-                '<div class="ck-ro"><span style="color:' + CK.cy + '">&#9632; rumo <b>' + ckN1(ckW360(s.yaw)) + '°</b></span><span style="color:' + CK.amber + '">&#9679; rota <b>' + (cog === null ? 'parado' : ckN1(cog) + '°') + '</b></span></div>' +
-                '<div class="ck-ro"><span>deriva <b>' + (beta === null ? '–' : ckN1(beta) + '°') + '</b></span><span>velocidade <b>' + ckN2(spd) + ' m/s</b></span></div>');
+            const tip = polar(s.yaw, R - 6), l = polar(s.yaw + 150, 16), rr = polar(s.yaw - 150, 16);
+            g += '<polygon points="' + tip[0].toFixed(1) + ',' + tip[1].toFixed(1) + ' ' + l[0].toFixed(1) + ',' + l[1].toFixed(1) + ' ' + cx + ',' + cy + ' ' + rr[0].toFixed(1) + ',' + rr[1].toFixed(1) + '" fill="' + COCKPIT_COLORS.cy + '" opacity=".92"/></svg>';
+            const beta = cog === null ? null : wrap180(cog - wrap360(s.yaw));
+            return panelHtml('ck-c3', 'Bússola: rumo e rota', g +
+                '<div class="ck-ro"><span style="color:' + COCKPIT_COLORS.cy + '">&#9632; rumo <b>' + fmt1(wrap360(s.yaw)) + '°</b></span><span style="color:' + COCKPIT_COLORS.amber + '">&#9679; rota <b>' + (cog === null ? 'parado' : fmt1(cog) + '°') + '</b></span></div>' +
+                '<div class="ck-ro"><span>deriva <b>' + (beta === null ? '–' : fmt1(beta) + '°') + '</b></span><span>velocidade <b>' + fmt2(spd) + ' m/s</b></span></div>');
         }
 
-        function ckSpeed(r, f, s) {
+        // Método: duas séries na mesma janela de 5 minutos: a velocidade medida (twist, no corpo) e a estimada a
+        // partir das posições suavizadas. Os eixos ajustam-se ao máximo e mínimo da janela.
+        // Obtemos: a comparação entre o que o robô diz que anda e o que as posições dizem.
+        function speedPanel(r, f, s) {
             const W = 300, H = 116, l = 30, rr = 6, t = 8, b = 18, pw = W - l - rr, ph = H - t - b;
             const a = Math.max(0, Math.floor(f) - 150), z = Math.min(numSteps - 1, Math.floor(f) + 150);
             const okIdx = (k) => k >= r.k0 && k <= r.k1;
@@ -1315,70 +1378,81 @@ class MissionWebDashboard:
             };
             let g = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img">';
             [lo, 0, hi].forEach(function (x) {
-                g += '<line x1="' + l + '" x2="' + (l + pw) + '" y1="' + Y(x).toFixed(1) + '" y2="' + Y(x).toFixed(1) + '" stroke="' + (x === 0 ? '#4b6288' : CK.line) + '"/><text x="' + (l - 4) + '" y="' + (Y(x) + 3.5).toFixed(1) + '" text-anchor="end" font-size="9.5" fill="' + CK.mut + '" font-family="monospace">' + x.toFixed(1) + '</text>';
+                g += '<line x1="' + l + '" x2="' + (l + pw) + '" y1="' + Y(x).toFixed(1) + '" y2="' + Y(x).toFixed(1) + '" stroke="' + (x === 0 ? '#4b6288' : COCKPIT_COLORS.line) + '"/><text x="' + (l - 4) + '" y="' + (Y(x) + 3.5).toFixed(1) + '" text-anchor="end" font-size="9.5" fill="' + COCKPIT_COLORS.mut + '" font-family="monospace">' + x.toFixed(1) + '</text>';
             });
-            g += '<path d="' + path(r.spd) + '" fill="none" stroke="' + CK.amber + '" stroke-width="1.8" stroke-dasharray="4 3"/><path d="' + path(r.u) + '" fill="none" stroke="' + CK.cy + '" stroke-width="2"/>';
-            g += '<line x1="' + X(f) + '" x2="' + X(f) + '" y1="' + t + '" y2="' + (t + ph) + '" stroke="' + CK.ink + '" stroke-width="1.2"/>';
-            g += '<text x="' + l + '" y="' + (H - 4) + '" font-size="9.5" fill="' + CK.mut + '" font-family="monospace">−5 min</text><text x="' + (l + pw) + '" y="' + (H - 4) + '" text-anchor="end" font-size="9.5" fill="' + CK.mut + '" font-family="monospace">+5 min</text></svg>';
-            return ckPanel('ck-c3', 'Velocidade: medida e estimada', g +
-                '<div class="ck-ro"><span style="color:' + CK.cy + '">&#9472; medida (twist) <b>' + ckN2(s.u) + ' m/s</b></span><span style="color:' + CK.amber + '">&#9548; das posições <b>' + ckN2(s.spd) + ' m/s</b></span></div>' +
-                '<div class="ck-ro"><span>diferença <b>' + ckN2(s.spd - s.u) + ' m/s</b></span><span>velocidade lateral <b>' + ckN2(s.v) + '</b></span><span>velocidade vertical <b>' + ckN2(s.w) + '</b></span></div>');
+            g += '<path d="' + path(r.spd) + '" fill="none" stroke="' + COCKPIT_COLORS.amber + '" stroke-width="1.8" stroke-dasharray="4 3"/><path d="' + path(r.u) + '" fill="none" stroke="' + COCKPIT_COLORS.cy + '" stroke-width="2"/>';
+            g += '<line x1="' + X(f) + '" x2="' + X(f) + '" y1="' + t + '" y2="' + (t + ph) + '" stroke="' + COCKPIT_COLORS.ink + '" stroke-width="1.2"/>';
+            g += '<text x="' + l + '" y="' + (H - 4) + '" font-size="9.5" fill="' + COCKPIT_COLORS.mut + '" font-family="monospace">−5 min</text><text x="' + (l + pw) + '" y="' + (H - 4) + '" text-anchor="end" font-size="9.5" fill="' + COCKPIT_COLORS.mut + '" font-family="monospace">+5 min</text></svg>';
+            return panelHtml('ck-c3', 'Velocidade: medida e estimada', g +
+                '<div class="ck-ro"><span style="color:' + COCKPIT_COLORS.cy + '">&#9472; medida (twist) <b>' + fmt2(s.u) + ' m/s</b></span><span style="color:' + COCKPIT_COLORS.amber + '">&#9548; das posições <b>' + fmt2(s.spd) + ' m/s</b></span></div>' +
+                '<div class="ck-ro"><span>diferença <b>' + fmt2(s.spd - s.u) + ' m/s</b></span><span>velocidade lateral <b>' + fmt2(s.v) + '</b></span><span>velocidade vertical <b>' + fmt2(s.w) + '</b></span></div>');
         }
 
-        function ckDepth(r, id, f, s) {
+        // Método: o desenho completo da profundidade é calculado uma só vez por robô (depthPathCache) e depois só se
+        // move o cursor. Os triângulos são os saltos de posição detetados no registo bruto.
+        // Obtemos: a profundidade ao longo da missão, o estado (superfície ou imersão) e atalhos para os saltos.
+        function depthPanel(r, id, f, s) {
             const W = 300, H = 130, l = 28, rr = 6, t = 8, b = 16, pw = W - l - rr, ph = H - t - b;
             const X = (k) => l + pw * k / (numSteps - 1), Y = (d) => t + ph * (Math.max(-2, Math.min(34, d)) + 2) / 36;
-            if (!ckDepthPaths[id]) {
+            if (!depthPathCache[id]) {
                 let d = '';
                 for (let k = Math.max(0, Math.ceil(r.k0)); k <= Math.min(numSteps - 1, Math.floor(r.k1)); k += 2) d += (d ? 'L' : 'M') + X(k).toFixed(1) + ' ' + Y(r.D[k]).toFixed(1) + ' ';
-                ckDepthPaths[id] = d;
+                depthPathCache[id] = d;
             }
             let g = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img">';
             [0, 10, 20, 30].forEach(function (d) {
-                g += '<line x1="' + l + '" x2="' + (l + pw) + '" y1="' + Y(d).toFixed(1) + '" y2="' + Y(d).toFixed(1) + '" stroke="' + (d === 0 ? '#4b6288' : CK.line) + '"/><text x="' + (l - 4) + '" y="' + (Y(d) + 3.5).toFixed(1) + '" text-anchor="end" font-size="9.5" fill="' + CK.mut + '" font-family="monospace">' + d + '</text>';
+                g += '<line x1="' + l + '" x2="' + (l + pw) + '" y1="' + Y(d).toFixed(1) + '" y2="' + Y(d).toFixed(1) + '" stroke="' + (d === 0 ? '#4b6288' : COCKPIT_COLORS.line) + '"/><text x="' + (l - 4) + '" y="' + (Y(d) + 3.5).toFixed(1) + '" text-anchor="end" font-size="9.5" fill="' + COCKPIT_COLORS.mut + '" font-family="monospace">' + d + '</text>';
             });
-            g += '<path d="' + ckDepthPaths[id] + '" fill="none" stroke="' + r.color + '" stroke-width="2"/>';
+            g += '<path d="' + depthPathCache[id] + '" fill="none" stroke="' + r.color + '" stroke-width="2"/>';
             (r.jumps || []).forEach(function (e) {
                 const x = X(e.t / dt_step);
-                g += '<polygon points="' + x.toFixed(1) + ',' + (t + ph + 1) + ' ' + (x - 4).toFixed(1) + ',' + (t + ph + 9) + ' ' + (x + 4).toFixed(1) + ',' + (t + ph + 9) + '" fill="' + CK.red + '"/>';
+                g += '<polygon points="' + x.toFixed(1) + ',' + (t + ph + 1) + ' ' + (x - 4).toFixed(1) + ',' + (t + ph + 9) + ' ' + (x + 4).toFixed(1) + ',' + (t + ph + 9) + '" fill="' + COCKPIT_COLORS.red + '"/>';
             });
-            g += '<line x1="' + X(f).toFixed(1) + '" x2="' + X(f).toFixed(1) + '" y1="' + t + '" y2="' + (t + ph) + '" stroke="' + CK.ink + '" stroke-width="1.2"/></svg>';
+            g += '<line x1="' + X(f).toFixed(1) + '" x2="' + X(f).toFixed(1) + '" y1="' + t + '" y2="' + (t + ph) + '" stroke="' + COCKPIT_COLORS.ink + '" stroke-width="1.2"/></svg>';
             const phase = s.D < 3 ? 'à superfície' : 'em imersão';
             const ev = (r.jumps || []).map(function (e) {
-                return '<button class="ck-btn" onclick="ckJump(' + e.t + ')">' + fmtElapsed(e.t) + ' · salto de ' + e.m.toFixed(1) + ' m' + (e.sub ? ' (imerso)' : '') + '</button>';
+                return '<button class="ck-btn" onclick="jumpToMissionTime(' + e.t + ')">' + fmtElapsed(e.t) + ' · salto de ' + e.m.toFixed(1) + ' m' + (e.sub ? ' (imerso)' : '') + '</button>';
             }).join(' ');
-            return ckPanel('ck-c3', 'Profundidade e eventos de navegação', g +
-                '<div class="ck-ro"><span>profundidade (Down) <b>' + ckN1(s.D) + ' m</b></span><span>fase <b>' + phase + '</b></span></div>' +
+            return panelHtml('ck-c3', 'Profundidade e eventos de navegação', g +
+                '<div class="ck-ro"><span>profundidade (Down) <b>' + fmt1(s.D) + ' m</b></span><span>fase <b>' + phase + '</b></span></div>' +
                 '<div class="ck-ro"><span>incerteza horizontal declarada (σ) <b>' + (s.sig * 100).toFixed(1) + ' cm</b></span></div>' +
                 '<div class="ck-ro"><span>saltos no registo bruto:</span>' + (ev || '<b>nenhum</b>') + '</div>');
         }
-        function ckJump(relSec) {
+        // Obtemos: salta a reprodução para um instante (segundos desde o início da missão).
+        function jumpToMissionTime(relSec) {
             currentTime = t0_base + relSec;
             document.getElementById('time-slider').value = currentTime;
             onSliderChange(currentTime);
         }
 
-        function ckNeighbours(id, f, s) {
+        // Método: para cada vizinho, (1) vetor de posição relativa em NED; (2) rodá-lo para o corpo com toBody;
+        // (3) azimute = atan2(y, x) e elevação = atan2(-z, distância horizontal); (4) velocidade relativa
+        // rv e aproximação = menos (d·rv) a dividir pela distância; (5) tempo do ponto mais próximo
+        // TCPA = menos (d·rv) a dividir por (rv·rv), limitado a 60 s, e CPA = distância nesse instante
+        // (o mesmo cálculo de proximity.py).
+        // Obtemos: o radar polar dos vizinhos no referencial do corpo e a tabela com distância, aproximação,
+        // TCPA e CPA, com alerta de cor pela menor distância.
+        function neighboursPanel(id, f, s) {
             const cx = 150, cy = 150, R0 = 128, rmap = (d) => R0 * Math.sqrt(Math.min(d, 400) / 400);
             const danger = timeline.collision_threshold_m, warn = timeline.proximity_warning_m;
             let g = '<svg viewBox="0 0 300 300" role="img">';
-            g += '<circle cx="' + cx + '" cy="' + cy + '" r="' + rmap(danger).toFixed(1) + '" fill="' + CK.red + '" opacity=".2"/>';
-            [[danger, CK.red, true], [warn, CK.amber, true], [100, '#3b5280', false], [300, '#3b5280', false]].forEach(function (c) {
-                g += '<circle cx="' + cx + '" cy="' + cy + '" r="' + rmap(c[0]).toFixed(1) + '" fill="none" stroke="' + c[1] + '" stroke-width="1"' + (c[2] ? ' stroke-dasharray="4 3"' : '') + '/><text x="' + (cx + 4) + '" y="' + (cy - rmap(c[0]) - 2).toFixed(1) + '" font-size="9.5" fill="' + CK.ink2 + '" font-family="monospace">' + c[0] + ' m</text>';
+            g += '<circle cx="' + cx + '" cy="' + cy + '" r="' + rmap(danger).toFixed(1) + '" fill="' + COCKPIT_COLORS.red + '" opacity=".2"/>';
+            [[danger, COCKPIT_COLORS.red, true], [warn, COCKPIT_COLORS.amber, true], [100, '#3b5280', false], [300, '#3b5280', false]].forEach(function (c) {
+                g += '<circle cx="' + cx + '" cy="' + cy + '" r="' + rmap(c[0]).toFixed(1) + '" fill="none" stroke="' + c[1] + '" stroke-width="1"' + (c[2] ? ' stroke-dasharray="4 3"' : '') + '/><text x="' + (cx + 4) + '" y="' + (cy - rmap(c[0]) - 2).toFixed(1) + '" font-size="9.5" fill="' + COCKPIT_COLORS.ink2 + '" font-family="monospace">' + c[0] + ' m</text>';
             });
-            g += '<line x1="' + cx + '" y1="' + (cy + R0) + '" x2="' + cx + '" y2="' + (cy - R0) + '" stroke="' + CK.red + '" stroke-width="1.2"/><line x1="' + (cx - R0) + '" y1="' + cy + '" x2="' + (cx + R0) + '" y2="' + cy + '" stroke="' + CK.green + '" stroke-width="1.2"/>';
-            g += '<text x="' + (cx + 5) + '" y="' + (cy - R0 - 2) + '" font-size="11" font-weight="700" fill="' + CK.red + '" font-family="monospace">x proa</text><text x="296" y="' + (cy - 5) + '" text-anchor="end" font-size="11" font-weight="700" fill="' + CK.green + '" font-family="monospace">y estibordo</text>';
-            g += '<polygon points="' + cx + ',' + (cy - 9) + ' ' + (cx + 6) + ',' + (cy + 7) + ' ' + (cx - 6) + ',' + (cy + 7) + '" fill="' + timeline.robots[id].color + '" stroke="' + CK.ink + '" stroke-width="1"/>';
+            g += '<line x1="' + cx + '" y1="' + (cy + R0) + '" x2="' + cx + '" y2="' + (cy - R0) + '" stroke="' + COCKPIT_COLORS.red + '" stroke-width="1.2"/><line x1="' + (cx - R0) + '" y1="' + cy + '" x2="' + (cx + R0) + '" y2="' + cy + '" stroke="' + COCKPIT_COLORS.green + '" stroke-width="1.2"/>';
+            g += '<text x="' + (cx + 5) + '" y="' + (cy - R0 - 2) + '" font-size="11" font-weight="700" fill="' + COCKPIT_COLORS.red + '" font-family="monospace">x proa</text><text x="296" y="' + (cy - 5) + '" text-anchor="end" font-size="11" font-weight="700" fill="' + COCKPIT_COLORS.green + '" font-family="monospace">y estibordo</text>';
+            g += '<polygon points="' + cx + ',' + (cy - 9) + ' ' + (cx + 6) + ',' + (cy + 7) + ' ' + (cx - 6) + ',' + (cy + 7) + '" fill="' + timeline.robots[id].color + '" stroke="' + COCKPIT_COLORS.ink + '" stroke-width="1"/>';
             let rows = '', minD = null;
             robotKeys.forEach(function (o) {
                 if (o === id) return;
                 const ro = timeline.robots[o];
                 const tag = '<b style="color:' + ro.color + '">&#9632;</b> ' + o;
                 if (!isActive(ro, f)) {
-                    rows += '<tr><td>' + tag + '</td><td colspan="6" style="color:' + CK.mut + '">sem dados (ativo de ' + fmtElapsed(ro.k0 * dt_step) + ' a ' + fmtElapsed(ro.k1 * dt_step) + ')</td></tr>';
+                    rows += '<tr><td>' + tag + '</td><td colspan="6" style="color:' + COCKPIT_COLORS.mut + '">sem dados (ativo de ' + fmtElapsed(ro.k0 * dt_step) + ' a ' + fmtElapsed(ro.k1 * dt_step) + ')</td></tr>';
                     return;
                 }
-                const t = ckState(ro, f);
+                const t = fullStateAt(ro, f);
                 const dN = t.N - s.N, dE = t.E - s.E, dD = t.D - s.D;
                 const b = toBody(s, dN, dE, dD);
                 const hor = Math.hypot(b.x, b.y), rng = Math.hypot(b.x, b.y, b.z);
@@ -1401,20 +1475,21 @@ class MissionWebDashboard:
                 if (minD === null || rng < minD) minD = rng;
                 const p = [cx + rmap(rng) * Math.sin(az * DEG), cy - rmap(rng) * Math.cos(az * DEG)];
                 g += '<line x1="' + cx + '" y1="' + cy + '" x2="' + p[0].toFixed(1) + '" y2="' + p[1].toFixed(1) + '" stroke="' + ro.color + '" stroke-width="1" stroke-dasharray="2 3" opacity=".7"/>' +
-                    '<circle cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) + '" r="6" fill="' + ro.color + '" stroke="' + CK.ink + '" stroke-width="1.5"/>' +
-                    '<text x="' + (p[0] + 9).toFixed(1) + '" y="' + (p[1] + 4).toFixed(1) + '" font-size="11" font-weight="600" fill="' + CK.ink + '">' + o.replace('Robot ', 'R') + ' · ' + rng.toFixed(0) + ' m</text>';
-                rows += '<tr><td>' + tag + '</td><td class="n">' + ckN1(az) + '°</td><td class="n">' + ckN1(el) + '°</td><td class="n">' + ckN1(rng) + '</td><td class="n">' + (clos >= 0 ? '+' : '') + ckN2(clos) +
-                    '</td><td class="n">' + tcpaTxt + '</td><td class="n">' + ckN1(cpa) + '</td></tr>';
+                    '<circle cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) + '" r="6" fill="' + ro.color + '" stroke="' + COCKPIT_COLORS.ink + '" stroke-width="1.5"/>' +
+                    '<text x="' + (p[0] + 9).toFixed(1) + '" y="' + (p[1] + 4).toFixed(1) + '" font-size="11" font-weight="600" fill="' + COCKPIT_COLORS.ink + '">' + o.replace('Robot ', 'R') + ' · ' + rng.toFixed(0) + ' m</text>';
+                rows += '<tr><td>' + tag + '</td><td class="n">' + fmt1(az) + '°</td><td class="n">' + fmt1(el) + '°</td><td class="n">' + fmt1(rng) + '</td><td class="n">' + (clos >= 0 ? '+' : '') + fmt2(clos) +
+                    '</td><td class="n">' + tcpaTxt + '</td><td class="n">' + fmt1(cpa) + '</td></tr>';
             });
             g += '</svg>';
             const cls = minD === null ? 'none' : (minD < danger ? 'crit' : (minD < warn ? 'warn' : 'safe'));
             const txt = minD === null ? 'Sem outros robots ativos' : (minD < danger ? 'Perigo de colisão' : (minD < warn ? 'Aviso de proximidade' : 'Sem risco de colisão'));
-            return ckPanel('ck-c12', 'Vizinhos no referencial do corpo',
+            return panelHtml('ck-c12', 'Vizinhos no referencial do corpo',
                 '<div class="ck-alert ' + cls + '"><span>' + txt + '</span><span style="font-weight:600;letter-spacing:0;text-transform:none">' + (minD === null ? 'sem dados para comparar' : 'distância mínima ' + minD.toFixed(1) + ' m') + '</span></div>' +
                 '<div class="ck-nb"><div>' + g + '</div><div class="ck-tw"><table><thead><tr><th>Vizinho</th><th class="n">Azimute</th><th class="n">Elevação</th><th class="n">Distância (m)</th><th class="n">Aproximação (m/s)</th><th class="n">Tempo até ao CPA</th><th class="n">CPA (m)</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>' +
                 '<div class="ck-ro"><span>Δ(corpo) = Rᵀ · (p(vizinho) − p(este)) &nbsp; azimute = atan2(y, x) &nbsp; elevação = atan2(−z, √(x²+y²)) &nbsp; CPA = ponto de maior aproximação, TCPA = tempo até lá</span></div>');
         }
 
+        // Obtemos: reconstrói os painéis do separador Cockpit para o robô selecionado no instante f.
         function updateCockpitView(f) {
             const root = document.getElementById('cockpit-root');
             const r = timeline.robots[currentRobot];
@@ -1422,13 +1497,13 @@ class MissionWebDashboard:
             const head = '<div class="ck-head ck-c12"><b>Cockpit · ' + currentRobot + '</b>';
             if (!isActive(r, f)) {
                 root.innerHTML = head + '</div><div class="ck-pn ck-c12"><h4>' + currentRobot + ' sem dados neste instante</h4>' +
-                    '<p style="color:' + CK.ink2 + ';margin-bottom:10px">Este robot tem dados de ' + fmtElapsed(r.k0 * dt_step) + ' a ' + fmtElapsed(r.k1 * dt_step) + '. Escolha um instante dentro desta janela.</p>' +
-                    '<button class="ck-btn" onclick="ckJump(' + (r.k0 * dt_step + 2).toFixed(1) + ')">Ir para o início do ' + currentRobot + '</button></div>';
+                    '<p style="color:' + COCKPIT_COLORS.ink2 + ';margin-bottom:10px">Este robot tem dados de ' + fmtElapsed(r.k0 * dt_step) + ' a ' + fmtElapsed(r.k1 * dt_step) + '. Escolha um instante dentro desta janela.</p>' +
+                    '<button class="ck-btn" onclick="jumpToMissionTime(' + (r.k0 * dt_step + 2).toFixed(1) + ')">Ir para o início do ' + currentRobot + '</button></div>';
                 return;
             }
-            const s = ckState(r, f);
-            root.innerHTML = head + '<span>Posição NED: Norte <b>' + ckN1(s.N) + '</b> m · Este <b>' + ckN1(s.E) + '</b> m · Profundidade (Down) <b>' + ckN1(s.D) + '</b> m</span></div>' +
-                ckAttitude(s) + ckCompass(s) + ckSpeed(r, f, s) + ckDepth(r, currentRobot, f, s) + ckNeighbours(currentRobot, f, s);
+            const s = fullStateAt(r, f);
+            root.innerHTML = head + '<span>Posição NED: Norte <b>' + fmt1(s.N) + '</b> m · Este <b>' + fmt1(s.E) + '</b> m · Profundidade (Down) <b>' + fmt1(s.D) + '</b> m</span></div>' +
+                attitudePanel(s) + compassPanel(s) + speedPanel(r, f, s) + depthPanel(r, currentRobot, f, s) + neighboursPanel(currentRobot, f, s);
         }
 
         // ---------- Previsão da trajetória (Vista Global e Vista 3ª Pessoa) ----------
@@ -1436,6 +1511,7 @@ class MissionWebDashboard:
         // Se a reta ia sair da água, termina à superfície.
         const PRED_H = 60.0;
         let predictOn = true;
+        // Obtemos: o atalho P (liga ou desliga as linhas de previsão de 60 s).
         function togglePredict() {
             predictOn = !predictOn;
             document.getElementById('btn-predict').classList.toggle('active', predictOn);
@@ -1445,10 +1521,11 @@ class MissionWebDashboard:
         // ---------- Separador 5: encontros e relatório da missão ----------
         // Os números vêm de Python (mission_report.py): posições suavizadas, grelha de 1 s, distância 3D.
         let reportBuilt = false;
-        const RP_LV = { perigo: ['crit', 'Perigo'], atencao: ['warn', 'Atenção'], aproximacao: ['apr', 'Aproximação'] };
-        const rpPair = (p) => p.a + ' e ' + p.b;
-        const rpT = (x) => fmtElapsed(x);
+        const REPORT_LEVELS = { perigo: ['crit', 'Perigo'], atencao: ['warn', 'Atenção'], aproximacao: ['apr', 'Aproximação'] };
+        const pairLabel = (p) => p.a + ' e ' + p.b;
+        const reportTime = (x) => fmtElapsed(x);
 
+        // Obtemos: salta para um instante do relatório e abre a Vista Global para ver o encontro.
         function reportGoTo(rel) {
             const target = Math.max(t0_base, Math.min(t_max, t0_base + rel));
             document.getElementById('time-slider').value = target;
@@ -1456,7 +1533,9 @@ class MissionWebDashboard:
             setView('global');
         }
 
-        function rpAllEncounters() {
+        // Método: juntar os episódios de todos os pares e ordenar pelo instante inicial.
+        // Obtemos: a lista cronológica de encontros da missão.
+        function allEncounters() {
             const out = [];
             timeline.report.pairs.forEach(function (p) {
                 p.episodes.forEach(function (e) { out.push(Object.assign({ a: p.a, b: p.b }, e)); });
@@ -1465,10 +1544,13 @@ class MissionWebDashboard:
             return out;
         }
 
-        function rpLevelTag(lv) { const c = RP_LV[lv]; return '<span class="rp-lv ' + c[0] + '">' + c[1] + '</span>'; }
+        // Obtemos: a etiqueta colorida do nível do encontro (perigo, atenção ou aproximação).
+        function levelTag(lv) { const c = REPORT_LEVELS[lv]; return '<span class="rp-lv ' + c[0] + '">' + c[1] + '</span>'; }
 
+        // Método: ler timeline.report (calculado em mission_report.py) e escrever as tabelas em HTML uma só vez.
+        // Obtemos: o separador 5 com resumo, encontros por par, saltos de posição e botões de exportação.
         function buildReport() {
-            const R = timeline.report, T = R.thresholds, enc = rpAllEncounters(), og = timeline.origin;
+            const R = timeline.report, T = R.thresholds, enc = allEncounters(), og = timeline.origin;
             const root = document.getElementById('report-root');
             if (!root) return;
             let best = null;
@@ -1481,45 +1563,45 @@ class MissionWebDashboard:
             // Resumo
             const lvTop = best === null ? 'none' : (best.d_min < T.danger ? 'crit' : (best.d_min < T.warning ? 'warn' : 'safe'));
             h += '<div class="ck-alert ' + lvTop + '"><span>' + (best === null ? 'Sem pares de robots com dados em simultâneo' :
-                'Menor distância da missão: ' + best.d_min.toFixed(1) + ' m (' + rpPair(best) + ', aos ' + rpT(best.t_min) + ')') + '</span>' +
+                'Menor distância da missão: ' + best.d_min.toFixed(1) + ' m (' + pairLabel(best) + ', aos ' + reportTime(best.t_min) + ')') + '</span>' +
                 '<span style="font-weight:600;letter-spacing:0;text-transform:none">' + enc.length + ' encontros abaixo de ' + T.encounter + ' m · ' +
                 nWarn + ' de atenção (abaixo de ' + T.warning + ' m) · ' + nDanger + ' de perigo (abaixo de ' + T.danger + ' m) · ' + R.jumps.length + ' saltos de posição</span></div>';
 
             // Robots
-            h += ckPanel('', 'Robots e janelas de dados', '<div class="ck-tw"><table><thead><tr><th>Robot</th><th class="n">Dados de</th><th class="n">até</th><th class="n">Duração</th><th class="n">Amostras</th><th class="n">Profundidade máxima (m)</th><th class="n">Saltos de posição</th></tr></thead><tbody>' +
+            h += panelHtml('', 'Robots e janelas de dados', '<div class="ck-tw"><table><thead><tr><th>Robot</th><th class="n">Dados de</th><th class="n">até</th><th class="n">Duração</th><th class="n">Amostras</th><th class="n">Profundidade máxima (m)</th><th class="n">Saltos de posição</th></tr></thead><tbody>' +
                 R.robots.map(function (o) {
-                    return '<tr><td><b style="color:' + timeline.robots[o.id].color + '">&#9632;</b> ' + o.label + '</td><td class="n">' + rpT(o.start) + '</td><td class="n">' + rpT(o.end) + '</td><td class="n">' + rpT(o.end - o.start) +
+                    return '<tr><td><b style="color:' + timeline.robots[o.id].color + '">&#9632;</b> ' + o.label + '</td><td class="n">' + reportTime(o.start) + '</td><td class="n">' + reportTime(o.end) + '</td><td class="n">' + reportTime(o.end - o.start) +
                         '</td><td class="n">' + o.n + '</td><td class="n">' + o.max_depth.toFixed(1) + '</td><td class="n">' + o.n_jumps + '</td></tr>';
                 }).join('') + '</tbody></table></div>');
 
             // Resumo por par
-            h += ckPanel('', 'Resumo por par de robots', '<div class="ck-tw"><table><thead><tr><th>Par</th><th class="n">Janela comum</th><th class="n">Distância mínima (m)</th><th class="n">Quando</th><th class="n">Tempo abaixo de ' + T.encounter + ' m</th><th class="n">abaixo de ' + T.warning + ' m</th><th class="n">abaixo de ' + T.danger + ' m</th><th></th></tr></thead><tbody>' +
+            h += panelHtml('', 'Resumo por par de robots', '<div class="ck-tw"><table><thead><tr><th>Par</th><th class="n">Janela comum</th><th class="n">Distância mínima (m)</th><th class="n">Quando</th><th class="n">Tempo abaixo de ' + T.encounter + ' m</th><th class="n">abaixo de ' + T.warning + ' m</th><th class="n">abaixo de ' + T.danger + ' m</th><th></th></tr></thead><tbody>' +
                 R.pairs.map(function (p) {
-                    if (p.overlap === null) return '<tr><td>' + rpPair(p) + '</td><td colspan="7" style="color:' + CK.mut + '">sem dados em simultâneo</td></tr>';
-                    return '<tr><td>' + rpPair(p) + '</td><td class="n">' + rpT(p.overlap[0]) + ' a ' + rpT(p.overlap[1]) + '</td><td class="n"><b>' + p.d_min.toFixed(1) + '</b></td><td class="n">' + rpT(p.t_min) +
+                    if (p.overlap === null) return '<tr><td>' + pairLabel(p) + '</td><td colspan="7" style="color:' + COCKPIT_COLORS.mut + '">sem dados em simultâneo</td></tr>';
+                    return '<tr><td>' + pairLabel(p) + '</td><td class="n">' + reportTime(p.overlap[0]) + ' a ' + reportTime(p.overlap[1]) + '</td><td class="n"><b>' + p.d_min.toFixed(1) + '</b></td><td class="n">' + reportTime(p.t_min) +
                         '</td><td class="n">' + p.below.w60.toFixed(0) + ' s</td><td class="n">' + p.below.w30.toFixed(0) + ' s</td><td class="n">' + p.below.w10.toFixed(0) + ' s</td>' +
                         '<td><button class="ck-btn" onclick="reportGoTo(' + (p.t_min - 10).toFixed(1) + ')">Ir para o mínimo</button></td></tr>';
                 }).join('') + '</tbody></table></div>');
 
             // Encontros
-            h += ckPanel('', 'Encontros: períodos com distância abaixo de ' + T.encounter + ' m', enc.length === 0 ? '<p style="color:' + CK.ink2 + '">Nenhum encontro.</p>' :
+            h += panelHtml('', 'Encontros: períodos com distância abaixo de ' + T.encounter + ' m', enc.length === 0 ? '<p style="color:' + COCKPIT_COLORS.ink2 + '">Nenhum encontro.</p>' :
                 '<div class="ck-tw"><table><thead><tr><th class="n">#</th><th>Par</th><th class="n">Início</th><th class="n">Fim</th><th class="n">Duração</th><th class="n">Distância mínima (m)</th><th class="n">No instante</th><th>Nível</th><th>Observação</th><th></th></tr></thead><tbody>' +
                 enc.map(function (e, i) {
-                    return '<tr class="rp-row" data-t0="' + e.t0 + '" data-t1="' + e.t1 + '"><td class="n">' + (i + 1) + '</td><td>' + rpPair(e) + '</td><td class="n">' + rpT(e.t0) + '</td><td class="n">' + rpT(e.t1) + '</td><td class="n">' + (e.t1 - e.t0 + 1).toFixed(0) + ' s</td><td class="n"><b>' + e.d_min.toFixed(1) +
-                        '</b></td><td class="n">' + rpT(e.t_min) + '</td><td>' + rpLevelTag(e.level) + '</td><td style="color:' + CK.amber + '">' + (e.jump_near ? 'coincide com salto de posição: confirmar' : '') +
+                    return '<tr class="rp-row" data-t0="' + e.t0 + '" data-t1="' + e.t1 + '"><td class="n">' + (i + 1) + '</td><td>' + pairLabel(e) + '</td><td class="n">' + reportTime(e.t0) + '</td><td class="n">' + reportTime(e.t1) + '</td><td class="n">' + (e.t1 - e.t0 + 1).toFixed(0) + ' s</td><td class="n"><b>' + e.d_min.toFixed(1) +
+                        '</b></td><td class="n">' + reportTime(e.t_min) + '</td><td>' + levelTag(e.level) + '</td><td style="color:' + COCKPIT_COLORS.amber + '">' + (e.jump_near ? 'coincide com salto de posição: confirmar' : '') +
                         '</td><td><button class="ck-btn" onclick="reportGoTo(' + (e.t_min - 10).toFixed(1) + ')">Ver na vista global</button></td></tr>';
                 }).join('') + '</tbody></table></div>');
 
             // Saltos
-            h += ckPanel('', 'Saltos de posição no registo bruto', R.jumps.length === 0 ? '<p style="color:' + CK.ink2 + '">Nenhum salto detetado.</p>' :
+            h += panelHtml('', 'Saltos de posição no registo bruto', R.jumps.length === 0 ? '<p style="color:' + COCKPIT_COLORS.ink2 + '">Nenhum salto detetado.</p>' :
                 '<div class="ck-tw"><table><thead><tr><th>Robot</th><th class="n">Instante</th><th class="n">Salto (m)</th><th class="n">Profundidade (m)</th><th>Estado</th><th></th></tr></thead><tbody>' +
                 R.jumps.map(function (j) {
-                    return '<tr><td><b style="color:' + timeline.robots[j.robot].color + '">&#9632;</b> ' + j.robot + '</td><td class="n">' + rpT(j.t) + '</td><td class="n"><b>' + j.m.toFixed(1) + '</b></td><td class="n">' + j.depth.toFixed(1) +
+                    return '<tr><td><b style="color:' + timeline.robots[j.robot].color + '">&#9632;</b> ' + j.robot + '</td><td class="n">' + reportTime(j.t) + '</td><td class="n"><b>' + j.m.toFixed(1) + '</b></td><td class="n">' + j.depth.toFixed(1) +
                         '</td><td>' + (j.depth > 3 ? 'imerso' : 'à superfície') + '</td><td><button class="ck-btn" onclick="reportGoTo(' + (j.t - 10).toFixed(1) + ')">Ver na vista global</button></td></tr>';
                 }).join('') + '</tbody></table></div>');
 
             // Exportar e notas
-            h += ckPanel('', 'Exportar e como ler', '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"><button onclick="reportExportMd()">Descarregar relatório (.md)</button><button onclick="reportExportCsv()">Descarregar encontros (.csv)</button></div>' +
+            h += panelHtml('', 'Exportar e como ler', '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px"><button onclick="reportExportMd()">Descarregar relatório (.md)</button><button onclick="reportExportCsv()">Descarregar encontros (.csv)</button></div>' +
                 '<p class="rp-note">Distância = distância 3D (Norte, Este e profundidade) entre as posições suavizadas (filtro de Kalman com suavizador RTS), calculada de 1 em 1 s na janela em que os dois robots têm dados. ' +
                 'Um encontro é um período seguido com distância abaixo de ' + T.encounter + ' m; o nível é dado pela distância mínima desse período (perigo abaixo de ' + T.danger + ' m, atenção abaixo de ' + T.warning + ' m). ' +
                 'Um salto é uma mudança de posição no registo bruto que implicaria mais de 2,5 m/s: um AUV não consegue isso, por isso é um defeito do registo. Um encontro que coincide com um salto (até 5 s de margem) deve ser confirmado antes de ser tratado como real. ' +
@@ -1528,6 +1610,7 @@ class MissionWebDashboard:
             reportBuilt = true;
         }
 
+        // Obtemos: destaca a linha do encontro que está a decorrer no instante atual.
         function updateReportView(f) {
             if (!reportBuilt) buildReport();
             const t = f * dt_step;
@@ -1536,6 +1619,8 @@ class MissionWebDashboard:
             });
         }
 
+        // Método: criar um Blob em memória e um link temporário com download.
+        // Obtemos: guardar um ficheiro no computador sem servidor.
         function reportDownload(name, text, mime) {
             const blob = new Blob([text], { type: mime });
             const url = URL.createObjectURL(blob);
@@ -1545,38 +1630,42 @@ class MissionWebDashboard:
             setTimeout(function () { document.body.removeChild(a); URL.revokeObjectURL(url); }, 500);
         }
 
+        // Obtemos: o relatório em CSV (uma linha por encontro) para abrir em Excel.
         function reportExportCsv() {
             const NL = String.fromCharCode(10), BOM = String.fromCharCode(0xFEFF);
             const rows = [['n', 'robot_a', 'robot_b', 'inicio_s', 'fim_s', 'duracao_s', 'distancia_minima_m', 'instante_minimo_s', 'nivel', 'coincide_com_salto'].join(';')];
-            rpAllEncounters().forEach(function (e, i) {
-                rows.push([i + 1, e.a, e.b, e.t0.toFixed(0), e.t1.toFixed(0), (e.t1 - e.t0 + 1).toFixed(0), e.d_min.toFixed(2), e.t_min.toFixed(0), RP_LV[e.level][1], e.jump_near ? 'sim' : 'nao'].join(';'));
+            allEncounters().forEach(function (e, i) {
+                rows.push([i + 1, e.a, e.b, e.t0.toFixed(0), e.t1.toFixed(0), (e.t1 - e.t0 + 1).toFixed(0), e.d_min.toFixed(2), e.t_min.toFixed(0), REPORT_LEVELS[e.level][1], e.jump_near ? 'sim' : 'nao'].join(';'));
             });
             reportDownload('encontros_tomsa.csv', BOM + rows.join(NL) + NL, 'text/csv;charset=utf-8');
         }
 
+        // Obtemos: o relatório em Markdown, pronto para colar no relatório do trabalho.
         function reportExportMd() {
-            const NL = String.fromCharCode(10), R = timeline.report, T = R.thresholds, enc = rpAllEncounters();
+            const NL = String.fromCharCode(10), R = timeline.report, T = R.thresholds, enc = allEncounters();
             const L = [];
             L.push('# Relatório da missão TOMSA', '', 'Origem NED: ' + timeline.origin.text, '');
             L.push('Limiares: perigo abaixo de ' + T.danger + ' m, atenção abaixo de ' + T.warning + ' m, encontro abaixo de ' + T.encounter + ' m.', '');
             L.push('## Robots', '', '| Robot | Dados de | até | Duração | Profundidade máxima (m) | Saltos de posição |', '|---|---|---|---|---|---|');
-            R.robots.forEach(function (o) { L.push('| ' + o.label + ' | ' + rpT(o.start) + ' | ' + rpT(o.end) + ' | ' + rpT(o.end - o.start) + ' | ' + o.max_depth.toFixed(1) + ' | ' + o.n_jumps + ' |'); });
+            R.robots.forEach(function (o) { L.push('| ' + o.label + ' | ' + reportTime(o.start) + ' | ' + reportTime(o.end) + ' | ' + reportTime(o.end - o.start) + ' | ' + o.max_depth.toFixed(1) + ' | ' + o.n_jumps + ' |'); });
             L.push('', '## Resumo por par', '', '| Par | Distância mínima (m) | Quando | Abaixo de ' + T.encounter + ' m | Abaixo de ' + T.warning + ' m | Abaixo de ' + T.danger + ' m |', '|---|---|---|---|---|---|');
             R.pairs.forEach(function (p) {
-                if (p.overlap === null) L.push('| ' + rpPair(p) + ' | sem dados em simultâneo | | | | |');
-                else L.push('| ' + rpPair(p) + ' | ' + p.d_min.toFixed(1) + ' | ' + rpT(p.t_min) + ' | ' + p.below.w60.toFixed(0) + ' s | ' + p.below.w30.toFixed(0) + ' s | ' + p.below.w10.toFixed(0) + ' s |');
+                if (p.overlap === null) L.push('| ' + pairLabel(p) + ' | sem dados em simultâneo | | | | |');
+                else L.push('| ' + pairLabel(p) + ' | ' + p.d_min.toFixed(1) + ' | ' + reportTime(p.t_min) + ' | ' + p.below.w60.toFixed(0) + ' s | ' + p.below.w30.toFixed(0) + ' s | ' + p.below.w10.toFixed(0) + ' s |');
             });
             L.push('', '## Encontros', '', '| # | Par | Início | Fim | Distância mínima (m) | No instante | Nível | Observação |', '|---|---|---|---|---|---|---|---|');
             enc.forEach(function (e, i) {
-                L.push('| ' + (i + 1) + ' | ' + rpPair(e) + ' | ' + rpT(e.t0) + ' | ' + rpT(e.t1) + ' | ' + e.d_min.toFixed(1) + ' | ' + rpT(e.t_min) + ' | ' + RP_LV[e.level][1] + ' | ' + (e.jump_near ? 'coincide com salto de posição' : '') + ' |');
+                L.push('| ' + (i + 1) + ' | ' + pairLabel(e) + ' | ' + reportTime(e.t0) + ' | ' + reportTime(e.t1) + ' | ' + e.d_min.toFixed(1) + ' | ' + reportTime(e.t_min) + ' | ' + REPORT_LEVELS[e.level][1] + ' | ' + (e.jump_near ? 'coincide com salto de posição' : '') + ' |');
             });
             L.push('', '## Saltos de posição no registo bruto', '', '| Robot | Instante | Salto (m) | Profundidade (m) | Estado |', '|---|---|---|---|---|');
-            R.jumps.forEach(function (j) { L.push('| ' + j.robot + ' | ' + rpT(j.t) + ' | ' + j.m.toFixed(1) + ' | ' + j.depth.toFixed(1) + ' | ' + (j.depth > 3 ? 'imerso' : 'à superfície') + ' |'); });
+            R.jumps.forEach(function (j) { L.push('| ' + j.robot + ' | ' + reportTime(j.t) + ' | ' + j.m.toFixed(1) + ' | ' + j.depth.toFixed(1) + ' | ' + (j.depth > 3 ? 'imerso' : 'à superfície') + ' |'); });
             L.push('', 'Distância 3D entre posições suavizadas (RTS), de 1 em 1 s. Tempos desde o início da missão.');
             reportDownload('relatorio_missao_tomsa.md', L.join(NL) + NL, 'text/markdown;charset=utf-8');
         }
 
         // ---------- Gráfico 2D de distâncias: move o cursor de tempo ----------
+        // Método: mover só a forma shapes[1] (o cursor vertical) do gráfico de distâncias.
+        // Obtemos: o cursor de tempo a acompanhar a reprodução sem refazer o gráfico.
         function updateProxView(f) {
             const gd = document.getElementById('plot-prox');
             if (!gd || !gd.layout || !gd.layout.shapes || gd.layout.shapes.length < 2) return;
@@ -1586,6 +1675,8 @@ class MissionWebDashboard:
 
         // ---------- Aviso de proximidade (Vista Global e Vista 3ª Pessoa) ----------
         // Amarelo: dois robôs ativos a menos de proximity_warning_m. Vermelho a piscar: menos de collision_threshold_m.
+        // Método: para cada par de robôs ativos, distância 3D = raiz de (dN2 + dE2 + dD2).
+        // Obtemos: faixa amarela (abaixo do aviso) ou vermelha a piscar (abaixo do limiar de colisão).
         function updateProximityBanner(f) {
             const box = document.getElementById('proximity-banner');
             if (!box) return;
@@ -1608,6 +1699,8 @@ class MissionWebDashboard:
             box.style.display = 'block';
         }
 
+        // Método: despachar para a função da vista atual.
+        // Obtemos: um único ponto de entrada para redesenhar tudo quando o tempo, o robô ou a vista mudam.
         function updateFrame(f) {
             updateProximityBanner(f);
             if (currentView === 'global') updateScene('plot-global', f, false);
@@ -1620,12 +1713,16 @@ class MissionWebDashboard:
         // ---------- Marcas de proximidade na barra do tempo ----------
         // Cada marca é um período em que dois robôs ativos estão a menos de proximity_warning_m (amarelo) ou a menos de
         // collision_threshold_m (vermelho). Ao clicar numa marca, o tempo salta para 10 s antes do início do período.
+        // Obtemos: salta para um instante absoluto, limitado ao início e ao fim da missão.
         function jumpToTime(t) {
             const target = Math.max(t0_base, Math.min(t_max, t));
             document.getElementById('time-slider').value = target;
             onSliderChange(target);
         }
 
+        // Método: percorrer a grelha de tempo para cada par e cada limiar; um episódio começa quando a
+        // distância passa abaixo do limiar e acaba quando sobe. Guarda-se a distância mínima e o instante.
+        // Obtemos: os blocos amarelos e vermelhos por baixo da barra do tempo (clique salta para 10 s antes).
         function buildProximityMarks() {
             const box = document.getElementById('prox-marks');
             if (!box) return;
@@ -1684,6 +1781,7 @@ class MissionWebDashboard:
         buildProximityMarks();
 
         // ---------- controlos ----------
+        // Obtemos: troca de painel (separador), marca o botão ativo e inicia o radar quando a vista é a 3ª Pessoa.
         function setView(view) {
             currentView = view;
             document.querySelectorAll('.view-panel').forEach(p => p.classList.remove('active'));
@@ -1701,6 +1799,7 @@ class MissionWebDashboard:
             if (view === 'pov') startThirdPersonOverlay();
         }
 
+        // Obtemos: muda o robô selecionado, liga o seguimento e atualiza a cor e o tamanho dos marcadores.
         function setRobot(robotId) {
             currentRobot = robotId;
             if (!followOn) setFollow(true);      // ao escolher um robô, a câmara da Vista Global vai ter com ele e segue-o
@@ -1718,6 +1817,7 @@ class MissionWebDashboard:
             updateFrame(curF());
         }
 
+        // Obtemos: define a velocidade de reprodução (Ultra percorre a missão toda em cerca de 2 s).
         function setSpeed(val) {
             speed = val;
             const map = { 'spd-slow': 0.25, 'spd-norm': 1.0, 'spd-fast': 5.0, 'spd-10': 10.0, 'spd-20': 20.0, 'spd-50': 50.0 };
@@ -1725,6 +1825,7 @@ class MissionWebDashboard:
             document.getElementById('spd-ultra').classList.toggle('active', val >= 500.0);
         }
 
+        // Obtemos: arranca ou para o ciclo de reprodução.
         function togglePlay() {
             isPlaying = !isPlaying;
             document.getElementById('btn-play').innerHTML = isPlaying ? '&#9208; Pausa' : '&#9654; Play';
@@ -1737,18 +1838,23 @@ class MissionWebDashboard:
             }
         }
 
+        // Obtemos: volta ao instante inicial (tecla R).
         function resetTrajectory() {
             currentTime = t0_base;
             document.getElementById('time-slider').value = t0_base;
             onSliderChange(t0_base);
         }
 
+        // Obtemos: ao arrastar a barra do tempo, atualiza o relógio e redesenha.
         function onSliderChange(val) {
             currentTime = parseFloat(val);
             document.getElementById('time-display').innerText = fmtElapsed(currentTime - t0_base);
             updateFrame(curF());
         }
 
+        // Método: requestAnimationFrame; o tempo avança dtSec vezes a velocidade escolhida (dtSec limitado a 0.25 s
+        // para não saltar depois de uma pausa) e os gráficos só se refazem cerca de 30 vezes por segundo.
+        // Obtemos: reprodução fluida mesmo com 50 vezes a velocidade.
         function runPlaybackLoop(timestamp) {
             if (!isPlaying) { lastFrameTimestamp = null; return; }
             if (!lastFrameTimestamp) lastFrameTimestamp = timestamp;
@@ -1794,6 +1900,7 @@ class MissionWebDashboard:
         });
 
         // Inicialização com parâmetros de URL: ?t=segundos_desde_o_inicio&view=pov&robot=2&play=1 (ou #t=...)
+        // Obtemos: abrir já num instante, vista e robô escolhidos pelo endereço (útil para tirar capturas de ecrã).
         function initFromUrl() {
             const params = new URLSearchParams(window.location.search);
             const hash = window.location.hash;
@@ -1853,6 +1960,7 @@ class MissionWebDashboard:
         html_cache = self.build_dashboard_html()
 
         class DashboardHTTPHandler(SimpleHTTPRequestHandler):
+            """Servidor mínimo: responde à página principal com o HTML já construído (html_cache)."""
             def do_GET(self):
                 if self.path == "/" or self.path.startswith("/?"):
                     self.send_response(200)

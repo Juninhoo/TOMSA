@@ -13,6 +13,8 @@ class TrajectoryKalmanRTS:
     """Estimador e suavizador estocástico bidirecional de trajetórias 3D."""
 
     def __init__(self, process_noise_q: float = 0.05, default_meas_std: float = 0.8):
+        """process_noise_q: quanto o filtro admite que a velocidade varia entre amostras (maior = segue mais as medidas).
+        default_meas_std: desvio padrão da posição [m] quando o CSV não traz incerteza (maior = alisa mais)."""
         self.q = process_noise_q
         self.default_meas_std = default_meas_std
 

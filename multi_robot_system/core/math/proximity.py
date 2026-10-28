@@ -13,6 +13,12 @@ import numpy as np
 
 @dataclass
 class CPAResult:
+    """Resultado da análise de um par de robôs num instante.
+
+    Método: posição relativa rodada para o corpo (azimute, elevação, distância) e ponto de maior aproximação
+    com movimento em linha reta (CPA = distância mínima, TCPA = daqui a quanto tempo).
+    Obtemos: tudo o que o Cockpit mostra sobre um vizinho.
+    """
     robot_i: str
     robot_j: str
     current_distance_m: float

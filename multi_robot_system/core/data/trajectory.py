@@ -14,6 +14,13 @@ from multi_robot_system.core.math.proximity import evaluate_proximity_and_cpa, C
 
 @dataclass
 class RobotTrajectory:
+    """Tudo o que se sabe de um robô, já alinhado e suavizado.
+
+    Método: cada campo é uma série com uma amostra por instante de tempo. As posições vêm do filtro de Kalman com
+    suavizador RTS (pos_ned) e, para comparar, guarda-se também a posição bruta do CSV (pos_ned_raw).
+    Obtemos: um objeto com posição, atitude, velocidades e incertezas, pronto para as vistas e para o relatório.
+    Convenção: NED = Norte, Este, Down (profundidade positiva); ângulos em graus.
+    """
     robot_id: str
     label: str
     color: str
@@ -36,19 +43,23 @@ class RobotTrajectory:
 
     @property
     def duration_s(self) -> float:
+        """Duração do registo: último instante menos o primeiro [s]."""
         return float(self.timestamps[-1] - self.timestamps[0])
 
     @property
     def total_distance_m(self) -> float:
+        """Método: somar os passos horizontais entre amostras seguidas (raiz de dN2 + dE2). Obtemos: caminho percorrido [m]."""
         diffs = np.diff(self.pos_ned[:2, :], axis=1)
         return float(np.sum(np.sqrt(diffs[0]**2 + diffs[1]**2)))
 
     @property
     def max_depth_m(self) -> float:
+        """Maior valor de D (Down) da trajetória suavizada [m]."""
         return float(np.max(self.pos_ned[2]))
 
     @property
     def mean_speed_m_s(self) -> float:
+        """Média do módulo da velocidade longitudinal (ao longo da proa) [m por segundo]."""
         return float(np.mean(np.abs(self.speed_longitudinal)))
 
 

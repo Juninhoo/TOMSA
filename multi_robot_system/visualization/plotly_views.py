@@ -427,6 +427,7 @@ PROX_PAIR_COLORS = ["#9085e9", "#d55181", "#e0a030"]   # uma cor por par de robo
 
 
 def _fmt_mission_time(sec: float) -> str:
+    """Segundos como minutos e segundos (62m 9.0s), igual ao relógio do navegador."""
     m = int(sec // 60)
     return f"{m}m {sec - 60 * m:.1f}s"
 
@@ -440,6 +441,7 @@ def _add_hline(fig: go.Figure, y: float, color: str, text: str, below: bool) -> 
 
 
 def _add_band(fig: go.Figure, y0: float, y1: float, color: str, opacity: float) -> None:
+    """Faixa horizontal colorida (zona de perigo ou de aviso) atrás das curvas, escrita à mão como _add_hline."""
     fig.add_shape(type="rect", xref="x domain", yref="y", x0=0, x1=1, y0=y0, y1=y1,
                   fillcolor=color, opacity=opacity, line_width=0, layer="below")
 
@@ -563,6 +565,7 @@ def create_proximity_timeline_figure(
         managed = smooth_idx + marker_idx + raw_idx
 
         def _vis(smooth, marker, raw):
+            # lista de visibilidade, por ordem: traços suavizados, marcadores, traços brutos (usada pelos 3 botões)
             return [smooth] * len(smooth_idx) + [marker] * len(marker_idx) + [raw] * len(raw_idx)
 
         menus = list(fig.layout.updatemenus)
