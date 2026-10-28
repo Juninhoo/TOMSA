@@ -9,6 +9,7 @@ Implementa:
 from typing import Dict, List, Optional, Tuple
 import numpy as np
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 from multi_robot_system.core.data.trajectory import MissionDataset
 from multi_robot_system.core.math.proximity import CPAResult
@@ -150,6 +151,93 @@ def get_scene_geometry(dataset: MissionDataset, seabed_margin_m: float = 5.0, to
 # -----------------------------------------------------------------------------
 # 2. Vista Global 3D (Com rasto progressivo)
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Modelo 3D do submarino (casco de torpedo com 4 aletas na cauda), partilhado entre Python e JavaScript
+# -----------------------------------------------------------------------------
+SUB_HALF_LENGTH_M = 5.0     # o casco vai de -5 m (cauda) a +5 m (proa) em torno da posição do robot
+SUB_RADIUS_M = 1.15
+_SUB_MESH_CACHE = {}
+
+
+def _sub_radius(x: float) -> float:
+    """Perfil do casco: nariz elíptico, corpo cilíndrico, cauda a afinar."""
+    R = SUB_RADIUS_M
+    if x > 3.0:
+        return R * float(np.sqrt(max(0.0, 1.0 - ((x - 3.0) / 2.0) ** 2)))
+    if x < -2.0:
+        return R * max(0.0, 1.0 - ((-2.0 - x) / 3.0) ** 2)
+    return R
+
+
+def build_submarine_mesh(n_phi: int = 14) -> dict:
+    """Malha do submarino no referencial do corpo (x proa, y estibordo, z quilha), em metros.
+
+    Devolve listas x, y, z (vértices) e i, j, k (triângulos). As aletas têm vértices duplicados com a
+    ordem invertida, para se verem iluminadas dos dois lados.
+    """
+    if n_phi in _SUB_MESH_CACHE:
+        return _SUB_MESH_CACHE[n_phi]
+    L = SUB_HALF_LENGTH_M
+    stations = np.unique(np.concatenate([np.linspace(-L, -2.0, 8), np.linspace(-2.0, 3.0, 6), np.linspace(3.0, L, 9)]))[1:-1]
+    verts = [(-L, 0.0, 0.0)]                                   # ponta da cauda
+    for x in stations:
+        r = _sub_radius(float(x))
+        for q in range(n_phi):
+            a = 2.0 * np.pi * q / n_phi
+            verts.append((float(x), r * float(np.cos(a)), r * float(np.sin(a))))
+    verts.append((L, 0.0, 0.0))                                # ponta da proa
+    tris = []
+    ns = len(stations)
+    ring = lambda s, q: 1 + s * n_phi + (q % n_phi)
+    for q in range(n_phi):                                     # leque da cauda
+        tris.append((0, ring(0, q + 1), ring(0, q)))
+    for s in range(ns - 1):                                    # corpo
+        for q in range(n_phi):
+            a, b, c, d = ring(s, q), ring(s, q + 1), ring(s + 1, q + 1), ring(s + 1, q)
+            tris.append((a, b, c))
+            tris.append((a, c, d))
+    last = len(verts) - 1
+    for q in range(n_phi):                                     # leque da proa
+        tris.append((last, ring(ns - 1, q), ring(ns - 1, q + 1)))
+    # Aletas em cruz na cauda: dorsal, ventral, bombordo, estibordo
+    for (uy, uz) in ((0.0, -1.0), (0.0, 1.0), (-1.0, 0.0), (1.0, 0.0)):
+        quad = [(-3.2, _sub_radius(-3.2)), (-4.9, _sub_radius(-4.9)), (-4.8, _sub_radius(-4.8) + 1.7), (-4.0, _sub_radius(-4.0) + 1.7)]
+        base = len(verts)
+        for x, rad in quad:
+            verts.append((x, uy * rad, uz * rad))
+        for x, rad in quad:
+            verts.append((x, uy * rad, uz * rad))
+        tris.append((base, base + 1, base + 2)); tris.append((base, base + 2, base + 3))
+        tris.append((base + 4, base + 6, base + 5)); tris.append((base + 4, base + 7, base + 6))
+    mesh = {
+        "x": [round(v[0], 3) for v in verts], "y": [round(v[1], 3) for v in verts], "z": [round(v[2], 3) for v in verts],
+        "i": [t[0] for t in tris], "j": [t[1] for t in tris], "k": [t[2] for t in tris],
+    }
+    _SUB_MESH_CACHE[n_phi] = mesh
+    return mesh
+
+
+def orient_submarine_mesh(mesh: dict, e: float, n: float, d: float, roll_deg: float, pitch_deg: float, yaw_deg: float, scale: float = 1.0):
+    """Roda a malha com a atitude (roll, pitch, yaw) e põe-na na posição (Este, Norte, Profundidade). Devolve x, y, z do Plotly."""
+    ph, th, ps = np.radians([roll_deg, pitch_deg, yaw_deg])
+    cph, sph, cth, sth, cps, sps = np.cos(ph), np.sin(ph), np.cos(th), np.sin(th), np.cos(ps), np.sin(ps)
+    R = np.array([
+        [cth * cps, sph * sth * cps - cph * sps, cph * sth * cps + sph * sps],
+        [cth * sps, sph * sth * sps + cph * cps, cph * sth * sps - sph * cps],
+        [-sth,      sph * cth,                   cph * cth],
+    ])   # corpo para NED (Rz yaw, Ry pitch, Rx roll): as colunas são os eixos x, y, z do corpo
+    body = np.vstack([mesh["x"], mesh["y"], mesh["z"]]) * scale
+    ned = R @ body + np.array([[n], [e], [d]])
+    return ned[1].tolist(), ned[0].tolist(), ned[2].tolist()
+
+
+def _mix_white(hex_color: str, f: float) -> str:
+    """Clareia uma cor #rrggbb misturando com branco (f de 0 a 1)."""
+    c = hex_color.lstrip("#")
+    r, g, b = (int(c[k:k + 2], 16) for k in (0, 2, 4))
+    return "#%02x%02x%02x" % tuple(int(round(v + (255 - v) * f)) for v in (r, g, b))
+
+
 def create_global_3d_figure(
     dataset: MissionDataset,
     current_time: float,
@@ -169,6 +257,7 @@ def create_global_3d_figure(
       - 2 + 3*N + i: Rota completa de cada robô (fantasma ténue)
       - 2 + 4*N + 3*i + a: Seta do eixo a (0 = x proa, 1 = y estibordo, 2 = z quilha) do robô i,
         colada ao robô e rodada com a sua atitude (roll, pitch, yaw)
+      - 2 + 7*N + i: Previsão a 60 s do robô i (reta com a velocidade estimada; preenchida em JS)
     (N = número de robôs. A ordem é usada pelo JavaScript do dashboard em web_server.py.)
     """
     fig = go.Figure()
@@ -233,7 +322,7 @@ def create_global_3d_figure(
 
         # Trace 3 + 3*i: Marcador de posição do veículo
         fig.add_trace(go.Scatter3d(
-            x=[curr_e], y=[curr_n], z=[curr_d],
+            x=[curr_e], y=[curr_n], z=[curr_d - 2.2],
             mode="markers+text",
             name=f"{r_id} (Atual)",
             marker=dict(size=marker_size, color=traj.color, symbol="diamond",
@@ -244,13 +333,17 @@ def create_global_3d_figure(
         ))
 
         # Trace 4 + 3*i: Modelo 3D do Submarino (Casco, asas e leme orientados em 3D)
-        sub_x, sub_y, sub_z = compute_submarine_wireframe(curr_e, curr_n, curr_d, yaw_deg, pitch_deg)
-        fig.add_trace(go.Scatter3d(
-            x=sub_x, y=sub_y, z=sub_z,
-            mode="lines",
+        mesh = build_submarine_mesh()
+        sub_x, sub_y, sub_z = orient_submarine_mesh(mesh, curr_e, curr_n, curr_d, roll_deg, pitch_deg, yaw_deg)
+        fig.add_trace(go.Mesh3d(
+            x=sub_x, y=sub_y, z=sub_z, i=mesh["i"], j=mesh["j"], k=mesh["k"],
             name=f"{r_id} (Casco 3D)",
             showlegend=False,
-            line=dict(color="#ffffff" if is_sel else traj.color, width=4)
+            hoverinfo="skip",
+            color=_mix_white(traj.color, 0.4) if is_sel else traj.color,
+            flatshading=False,
+            lighting=dict(ambient=0.55, diffuse=0.85, specular=0.35, roughness=0.45, fresnel=0.2),
+            lightposition=dict(x=0, y=-2000, z=3000)
         ))
 
     # Rota completa de cada robô (fantasma ténue) - traces 2 + 3*N + i. O rasto brilhante revela-se por cima.
@@ -279,6 +372,15 @@ def create_global_3d_figure(
                 textfont=dict(color=BODY_AXIS_COLORS[a], size=13),
                 line=dict(color=BODY_AXIS_COLORS[a], width=7)
             ))
+
+    # Previsão a 60 s (traces 2 + 7*N + i): começa vazia, o JavaScript preenche-a a cada instante
+    for r_id in sorted_robots:
+        traj = dataset.trajectories[r_id]
+        e0, n0, d0 = body_pose[r_id][0], body_pose[r_id][1], body_pose[r_id][2]
+        fig.add_trace(go.Scatter3d(
+            x=[e0], y=[n0], z=[d0], mode="lines", name=f"{r_id} (Previsão 60 s)", showlegend=False,
+            hoverinfo="skip", line=dict(color=traj.color, width=5, dash="dash")
+        ))
 
     # Layout Dark Mode com Profundidade Invertida (autoranging reversed em Z para maior profundidade = mais em baixo)
     fig.update_layout(
@@ -321,14 +423,42 @@ def create_pov_camera_figure(
 # -------------------------------------------------------------
 # 4. Gráfico Temporal 2D de Proximidade (com limiar 10m)
 # -------------------------------------------------------------
+PROX_PAIR_COLORS = ["#9085e9", "#d55181", "#e0a030"]   # uma cor por par de robots (distinguíveis em fundo escuro)
+
+
+def _fmt_mission_time(sec: float) -> str:
+    m = int(sec // 60)
+    return f"{m}m {sec - 60 * m:.1f}s"
+
+
+def _add_hline(fig: go.Figure, y: float, color: str, text: str, below: bool) -> None:
+    """Linha horizontal tracejada com rótulo no canto direito (escrita à mão: add_hline não funciona antes de haver traços)."""
+    fig.add_shape(type="line", xref="x domain", yref="y", x0=0, x1=1, y0=y, y1=y,
+                  line=dict(color=color, dash="dash", width=1.5))
+    fig.add_annotation(xref="x domain", yref="y", x=1, y=y, text=text, showarrow=False, xanchor="right",
+                       yanchor="top" if below else "bottom", font=dict(color=color, size=11))
+
+
+def _add_band(fig: go.Figure, y0: float, y1: float, color: str, opacity: float) -> None:
+    fig.add_shape(type="rect", xref="x domain", yref="y", x0=0, x1=1, y0=y0, y1=y1,
+                  fillcolor=color, opacity=opacity, line_width=0, layer="below")
+
+
 def create_proximity_timeline_figure(
     dataset: MissionDataset,
     current_time: float,
     collision_threshold_m: float = 10.0,
-    dt_step_s: float = 2.0
+    dt_step_s: float = 2.0,
+    warning_threshold_m: float = 30.0
 ) -> go.Figure:
-    """Gera o gráfico 2D da evolução temporal das distâncias relativas entre robôs."""
-    fig = go.Figure()
+    """Gráfico 2D da evolução temporal das distâncias relativas entre robôs.
+
+    - Uma cor por par, com o nome escrito no fim de cada linha e o mínimo de cada par assinalado.
+    - Faixas de aviso (abaixo de warning_threshold_m) e de perigo (abaixo de collision_threshold_m).
+    - Por baixo, uma barra por robô a mostrar quando tem dados (fora dela o par não existe, não é um erro).
+    - Botões para mudar a escala vertical: 0 a 400 m, ampliação 0 a 60 m e logarítmica.
+    IMPORTANTE: a ordem das formas (shapes) é usada pelo JavaScript: shapes[1] é o cursor do tempo atual.
+    """
     start_t = dataset.t0_mission
     end_t = dataset.t_end_mission
     times = np.arange(start_t, end_t, dt_step_s)
@@ -339,49 +469,111 @@ def create_proximity_timeline_figure(
 
     # Posições interpoladas (NaN fora da janela de operação de cada robô)
     pos = {}
+    pos_raw = {}   # posições brutas (sem RTS), se existirem
     for r_id, traj in dataset.trajectories.items():
         p = np.vstack([np.interp(times, traj.timestamps, traj.pos_ned[k]) for k in range(3)])
         p[:, (times < traj.timestamps[0]) | (times > traj.timestamps[-1])] = np.nan
         pos[r_id] = p
-    distances = {f"{p1} - {p2}": np.linalg.norm(pos[p1] - pos[p2], axis=0) for p1, p2 in pairs}
+        if getattr(traj, "pos_ned_raw", None) is not None:
+            q = np.vstack([np.interp(times, traj.timestamps, traj.pos_ned_raw[k]) for k in range(3)])
+            q[:, (times < traj.timestamps[0]) | (times > traj.timestamps[-1])] = np.nan
+            pos_raw[r_id] = q
 
-    colors = ["#f4a261", "#e76f51", "#2a9d8f", "#e63946"]
-    for idx, (label, dist_vals) in enumerate(distances.items()):
-        fig.add_trace(go.Scatter(
-            x=t_rel_list, y=dist_vals,
-            mode="lines",
-            name=label,
-            line=dict(color=colors[idx % len(colors)], width=2.5)
-        ))
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.82, 0.18], vertical_spacing=0.06)
 
-    # Limiar crítico de colisão (< 10m conforme Q39)
-    fig.add_hline(
-        y=collision_threshold_m,
-        line_dash="dash",
-        line_color="#e63946",
-        annotation_text="LIMIAR CRÍTICO (< 10m)",
-        annotation_position="bottom right",
-        annotation_font_color="#e63946"
-    )
-
-    # Marcador de tempo atual
+    # Limiar crítico (forma 0) e cursor do tempo atual (forma 1): esta ordem não pode mudar
+    _add_hline(fig, collision_threshold_m, "#e63946", f"CRÍTICO (< {collision_threshold_m:g} m)", below=True)
     curr_t_rel = current_time - dataset.t0_mission
-    fig.add_vline(
-        x=curr_t_rel,
-        line_color="#00b4d8",
-        line_width=2,
-        annotation_text="Tempo Atual",
-        annotation_position="top"
-    )
+    fig.add_shape(type="line", xref="x", yref="paper", x0=curr_t_rel, x1=curr_t_rel, y0=0, y1=1,
+                  line=dict(color="#00b4d8", width=2))
+
+    # Faixas de perigo e de aviso e linha dos 30 m
+    _add_band(fig, 0.01, collision_threshold_m, "#e63946", 0.16)
+    _add_band(fig, collision_threshold_m, warning_threshold_m, "#f4a261", 0.12)
+    _add_hline(fig, warning_threshold_m, "#f4a261", f"AVISO (< {warning_threshold_m:g} m)", below=False)
+
+    # Uma curva por par, com rótulo direto no fim e o mínimo assinalado
+    smooth_idx, marker_idx, raw_idx = [], [], []   # índices dos traços, para o botão suavizado / bruto
+    for idx, (p1, p2) in enumerate(pairs):
+        dist = np.linalg.norm(pos[p1] - pos[p2], axis=0)
+        color = PROX_PAIR_COLORS[idx % len(PROX_PAIR_COLORS)]
+        short = f"{p1.replace('Robot ', 'R')} – {p2.replace('Robot ', 'R')}"
+        fig.add_trace(go.Scatter(
+            x=t_rel_list, y=dist, mode="lines", name=f"{p1} – {p2}",
+            line=dict(color=color, width=2.5),
+            hovertemplate="<b>" + short + "</b><br>t = %{x:.0f} s<br>distância = %{y:.1f} m<extra></extra>"
+        ), row=1, col=1)
+        smooth_idx.append(len(fig.data) - 1)
+        if p1 in pos_raw and p2 in pos_raw:
+            dist_raw = np.linalg.norm(pos_raw[p1] - pos_raw[p2], axis=0)
+            fig.add_trace(go.Scatter(
+                x=t_rel_list, y=dist_raw, mode="lines", name=f"{p1} – {p2} (bruto)", visible=False, showlegend=False,
+                line=dict(color=color, width=1.4, dash="dot"),
+                hovertemplate="<b>" + short + " (bruto)</b><br>t = %{x:.0f} s<br>distância = %{y:.1f} m<extra></extra>"
+            ), row=1, col=1)
+            raw_idx.append(len(fig.data) - 1)
+        valid = np.where(~np.isnan(dist))[0]
+        if len(valid) == 0:
+            continue
+        i_min, i_end = valid[np.argmin(dist[valid])], valid[-1]
+        fig.add_trace(go.Scatter(
+            x=[t_rel_list[i_min]], y=[dist[i_min]], mode="markers+text",
+            text=[f"mín {dist[i_min]:.1f} m"], textposition="top center", textfont=dict(color="#e0e1dd", size=11),
+            marker=dict(size=9, color="#111827", line=dict(color=color, width=2)),
+            showlegend=False, hoverinfo="skip"
+        ), row=1, col=1)
+        marker_idx.append(len(fig.data) - 1)
+        fig.add_annotation(x=t_rel_list[i_end], y=dist[i_end], text="<b>" + short + "</b>", showarrow=False,
+                           xanchor="left", xshift=6, font=dict(color="#e0e1dd", size=12), row=1, col=1)
+
+    # Barras de presença: quando cada robô tem dados
+    n = len(r_ids)
+    for k, r_id in enumerate(r_ids):
+        traj = dataset.trajectories[r_id]
+        a, b = float(traj.timestamps[0] - dataset.t0_mission), float(traj.timestamps[-1] - dataset.t0_mission)
+        fig.add_trace(go.Scatter(
+            x=[a, b], y=[n - 1 - k, n - 1 - k], mode="lines", line=dict(color=traj.color, width=9),
+            showlegend=False,
+            hovertemplate=f"<b>{r_id}</b><br>com dados de {_fmt_mission_time(a)} a {_fmt_mission_time(b)}<extra></extra>"
+        ), row=2, col=1)
+    fig.update_yaxes(tickmode="array", tickvals=list(range(n)), ticktext=[r.replace("Robot ", "R") for r in reversed(r_ids)],
+                     range=[-0.7, n - 0.3], showgrid=False, zeroline=False, title_text="Dados", row=2, col=1)
+
+    fig.update_yaxes(title_text="Distância de separação (m)", range=[0, 410], row=1, col=1)
+    fig.update_xaxes(title_text="Tempo decorrido na missão (s)", row=2, col=1)
 
     fig.update_layout(
         template="plotly_dark",
         paper_bgcolor="#0b0f19",
         plot_bgcolor="#111827",
-        title="<b>Evolução Temporal da Distância Relativa Inter-Robôs</b>",
-        xaxis_title="Tempo Decorrido na Missão (s)",
-        yaxis_title="Distância de Separação (m)",
+        title="<b>Distância entre robots ao longo da missão</b>",
         autosize=True,
-        margin=dict(l=50, r=50, t=50, b=40)
+        margin=dict(l=60, r=50, t=80, b=50),
+        updatemenus=[dict(
+            type="buttons", direction="right", x=1.0, xanchor="right", y=1.0, yanchor="bottom",
+            bgcolor="#cbd5e1", bordercolor="#94a3b8", font=dict(color="#0b0f19", size=12),
+            buttons=[
+                dict(label="0 a 400 m", method="relayout", args=[{"yaxis.type": "linear", "yaxis.range": [0, 410]}]),
+                dict(label="Ampliar 0 a 60 m", method="relayout", args=[{"yaxis.type": "linear", "yaxis.range": [0, 60]}]),
+                dict(label="Escala logarítmica", method="relayout", args=[{"yaxis.type": "log", "yaxis.range": [float(np.log10(5.0)), float(np.log10(500.0))]}]),
+            ],
+        )],
     )
+    if raw_idx:
+        managed = smooth_idx + marker_idx + raw_idx
+
+        def _vis(smooth, marker, raw):
+            return [smooth] * len(smooth_idx) + [marker] * len(marker_idx) + [raw] * len(raw_idx)
+
+        menus = list(fig.layout.updatemenus)
+        menus.append(dict(
+            type="buttons", direction="right", x=0.0, xanchor="left", y=1.0, yanchor="bottom",
+            bgcolor="#cbd5e1", bordercolor="#94a3b8", font=dict(color="#0b0f19", size=12),
+            buttons=[
+                dict(label="Suavizado (RTS)", method="restyle", args=[{"visible": _vis(True, True, False)}, managed]),
+                dict(label="Bruto (CSV)", method="restyle", args=[{"visible": _vis(False, False, True)}, managed]),
+                dict(label="Ambos", method="restyle", args=[{"visible": _vis(True, True, True)}, managed]),
+            ],
+        ))
+        fig.update_layout(updatemenus=menus)
     return fig

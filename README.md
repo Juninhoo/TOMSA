@@ -214,11 +214,11 @@ python main.py --export-reports
 
 O subsistema consolidado em [multi_robot_system/](file:///home/geovani/antigravityProjects/ISEP/TOMSA/multi_robot_system) oferece visualização tática avançada e filtros de Kalman com suavizador RTS:
 
-#### A. Iniciar o Dashboard Web Interativo (Plotly com 4 Vistas)
+#### A. Iniciar o Dashboard Web Interativo (Plotly com 5 Vistas)
 ```bash
 python multi_robot_system/main.py --web
 ```
-*Abre automaticamente `http://127.0.0.1:8050` com 4 vistas: Global 3D, POV 1ª pessoa, Cockpit com horizonte artificial e Gráfico temporal de distâncias CPA.*
+*Abre automaticamente `http://127.0.0.1:8050` com 5 vistas: Global 3D, 3ª Pessoa com radar, Cockpit de navegação, gráfico de distâncias e separador «5. Encontros e relatório». Tudo o que mudou, por ordem, está em [docs/REGISTO_DE_ALTERACOES.md](docs/REGISTO_DE_ALTERACOES.md).*
 
 #### B. Gerar o Pacote HTML Autónomo Offline
 ```bash

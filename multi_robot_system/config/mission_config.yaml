@@ -8,6 +8,7 @@
 origin:
   # 'data_mean' = origem calculada dos dados (média lat/lon; superfície = mediana das 1as 50 alturas),
   # igual ao visualizador de referência trajectories/. 'fixed' = usa os valores abaixo.
+  # 'surface_reference' = usa a origem oficial do enunciado (os valores abaixo); 'fixed' faz o mesmo.
   mode: data_mean
   latitude: 41.45201666666667   # Graus decimais (Norte positivo)
   longitude: -8.81322222222222  # Graus decimais (Este positivo)

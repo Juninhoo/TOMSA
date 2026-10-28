@@ -52,7 +52,8 @@ def load_mission(config_path: str) -> Tuple[MissionDataset, dict]:
         lat0, lon0, h0 = compute_reference_origin([_resolve(r["file"]) for r in cfg["robots"]])
     else:
         lat0, lon0, h0 = float(orig["latitude"]), float(orig["longitude"]), float(orig["altitude"])
-    cfg["origin_resolved"] = {"latitude": lat0, "longitude": lon0, "altitude": h0}
+    cfg["origin_resolved"] = {"latitude": lat0, "longitude": lon0, "altitude": h0,
+                              "mode": "data_mean" if orig.get("mode", "fixed") == "data_mean" else "surface_reference"}
 
     print(f"\n[INICIALIZAÇÃO] Origem de Referência: Lat={lat0:.6f}°, Lon={lon0:.6f}°, Alt={h0:.2f}m")
     trajectories = {}
@@ -95,7 +96,8 @@ def load_mission(config_path: str) -> Tuple[MissionDataset, dict]:
             cov_diag=raw_dict["cov_diag"],
             vel_body_meas=raw_dict.get("vel_body_meas"),
             sigma_h_decl=raw_dict.get("sigma_h_decl"),
-            jump_events=raw_dict.get("jump_events")
+            jump_events=raw_dict.get("jump_events"),
+            pos_ned_raw=raw_dict.get("pos_ned_raw")
         )
         trajectories[r_id] = traj
         dt_ms = (time.perf_counter() - t0) * 1000.0

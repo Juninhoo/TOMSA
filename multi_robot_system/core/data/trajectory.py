@@ -32,6 +32,7 @@ class RobotTrajectory:
     vel_body_meas: Optional[np.ndarray] = None   # (3, N) twist.linear medido [u, v, w] m/s (referencial do corpo)
     sigma_h_decl: Optional[np.ndarray] = None    # (N,) incerteza horizontal declarada [m]
     jump_events: Optional[list] = None           # saltos de posição no registo bruto [{t, m, depth_m}]
+    pos_ned_raw: Optional[np.ndarray] = None     # (3, N) posição NED bruta, sem suavização RTS
 
     @property
     def duration_s(self) -> float:

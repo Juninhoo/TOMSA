@@ -28,7 +28,7 @@ multi_robot_system/
 │       ├── odom_loader.py          # Leitor seguro de CSV (ordenação estrita por tempo)
 │       └── trajectory.py           # Dataclass RobotTrajectory e MissionDataset sincronizado
 ├── visualization/                  # Camada de apresentação e interface web
-│   ├── plotly_views.py             # Motor 3D da Vista Global e da Vista POV (1ª Pessoa)
+│   ├── plotly_views.py             # Motor 3D da Vista Global e da Vista 3ª Pessoa
 │   ├── cockpit_view.py             # 3ª Vista: Painel de Instrumentos / Sala de Controlo
 │   └── web_server.py               # Servidor HTTP multithreaded com dashboard integrado
 ├── io_export/
@@ -68,31 +68,40 @@ PYTHONPATH=. .venv/bin/python3 multi_robot_system/main.py --all
 
 ---
 
-## 3. As Quatro Vistas do Sistema
+## 3. As Cinco Vistas do Sistema
 
-O utilizador pode alternar entre as 4 vistas através dos botões no cabeçalho ou premindo a tecla **`V`**:
+O utilizador pode alternar entre as 5 vistas através dos botões no cabeçalho ou premindo a tecla **`V`**:
 
 ### Vista 1: Global 3D (Visão Panorâmica)
 - **Cenário**: Representa todos os submarinos num referencial local comum NED com profundidade real.
 - **Batimetria**: Fundo do mar em grelha cinzenta e superfície da água como plano azul translúcido ($D = 0\,\text{m}$).
 - **Rasto Progressivo**: A trajetória inicia sem traço e vai sendo desenhada gradualmente à medida que o tempo avança.
-- **Modelos 3D Wireframe**: Cada veículo é representado por um modelo 3D com nariz, asas e leme dorsal orientado em 3D conforme yaw, pitch e roll.
+- **Submarino 3D**: cada veículo é uma malha sólida (casco, barbatanas e leme) orientada em 3D conforme yaw, pitch e roll, na cor do robot.
 
-### Vista 2: POV (1.ª Pessoa / Câmara Submarina)
-- **Perspetiva**: Câmara virtual posicionada no nariz do submarino ativo (Robot 1, 4 ou 7), orientada pela sua proa e pitch.
-- **Cena Tridimensional**: Visualização relativas dos outros veículos no mar com o casco do próprio veículo oculto para visibilidade total.
+### Vista 2: Vista 3.ª Pessoa
+- **Perspetiva**: câmara atrás e acima do robot selecionado (Robot 1, 4 ou 7), que se vê de fora. Rato: arrastar roda à volta, roda do rato ou teclas + e - mudam a distância, duplo clique repõe.
+- **Radar e mini-cockpit**: radar circular com os outros robots (alcance regulável) e quatro instrumentos (velocidade, rotação, profundidade e inclinação) do robot selecionado.
+- **Previsão de 60 s (tecla P, vistas Global e 3ª Pessoa)**: linha tracejada com a posição de cada robot daqui a 60 s se mantiver a velocidade.
 
 ### Vista 3: Cockpit / Sala de Controlo (Painel de Instrumentos)
-- **Horizonte Artificial e Bússola**: Ângulos de Roll, Pitch e Heading (0° a 360° com rosa-dos-ventos).
-- **Profundímetro Digital**: Mostrador de cota vertical com linha de fundo.
-- **Velocímetro de Avanço**: Velocidade linear orientada na direção do movimento longitudinal.
-- **Taxa de Viragem (Yaw Rate)**: Indicador de velocidade angular em graus por segundo durante as curvas.
-- **Radar Tático AER**: Ecrã polar que projeta a posição relativa de todos os submarinos circundantes.
-- **Painel Anunciador de Segurança CPA**: Alerta a vermelho quando a distância de aproximação for inferior a **10 metros**.
+- **Atitude 3D e eixos do corpo**: modelo do robot com os eixos x (proa), y (estibordo) e z (quilha), os eixos N, E, D, o rolamento (roll), a arfagem (pitch) e a guinada (yaw) em destaque e o quaternião.
+- **Rumo e rota**: bússola com o rumo (heading) e a rota (course), esta só quando a velocidade é superior a 0,3 m/s.
+- **Velocidade**: medida (twist do CSV) contra estimada (filtro RTS).
+- **Profundidade**: ao longo do tempo, com os saltos de posição assinalados.
+- **Vizinhos no referencial do corpo**: azimute, elevação, distância, aproximação, tempo até ao ponto de maior aproximação (TCPA) e distância nesse ponto (CPA, horizonte de 60 s).
+- **Alerta de proximidade**: atenção abaixo de 30 m e perigo abaixo de 10 m (limiares em `mission_config.yaml`).
 
 ### Vista 4: Distâncias CPA 2D (Evolução Temporal)
 - **Gráfico Temporal**: Curvas contínuas de distância de separação entre cada par de robôs ao longo do tempo de missão.
 - **Limiar Crítico**: Linha tracejada vermelha no valor limite de **10 metros** e cursor vertical azul sincronizado com o tempo atual da simulação.
+- **Faixas e mínimos**: faixa de aviso (abaixo de 30 m), mínimo de cada par assinalado e barras que mostram quando cada robot tem dados.
+- **Suavizado, bruto ou ambos**: botões à esquerda para ver a posição filtrada (RTS), a do CSV sem filtro, ou as duas.
+
+### Vista 5: Encontros e relatório da missão
+- **Resumo**: menor distância da missão, número de encontros (períodos seguidos abaixo de 60 m), alertas e saltos de posição.
+- **Tabelas**: janelas de dados por robot, resumo por par, encontros (com nível e aviso se coincidem com um salto de posição) e saltos no registo bruto.
+- **Navegação**: o botão de cada linha salta para 10 s antes e abre a Vista Global.
+- **Exportação**: relatório em Markdown (.md) e encontros em CSV (.csv).
 
 ---
 
@@ -103,7 +112,9 @@ O utilizador pode alternar entre as 4 vistas através dos botões no cabeçalho 
 | **`1`** | Seleciona o **Robot 1** (AUV Alpha) como submarino ativo |
 | **`2`** | Seleciona o **Robot 4** (AUV Bravo) como submarino ativo |
 | **`3`** | Seleciona o **Robot 7** (AUV Charlie) como submarino ativo |
-| **`V`** | Alterna ciclicamente entre as 4 Vistas: Global 3D $\to$ POV $\to$ Cockpit $\to$ CPA 2D |
+| **`V`** | Alterna ciclicamente entre as 5 Vistas: Global 3D $\to$ 3ª Pessoa $\to$ Cockpit $\to$ CPA 2D $\to$ Encontros e relatório |
+| **`F`** / **`G`** | Segue o robot selecionado / volta à vista geral |
+| **`P`** | Liga ou desliga a previsão de 60 s |
 | **`R`** | **Reinicia a reprodução das trajetórias** (reset imediato ao instante inicial) |
 | **Espaço** | **Play / Pausa** da animação |
 
