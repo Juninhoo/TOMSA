@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Ponto de Entrada Principal (CLI) do Sistema Multi-Robot Trajectory Viewer & Analyzer.
+"""Programa principal do dashboard multi-robô (linha de comandos).
 
-Unidade Curricular: TOMSA (Tópicos de Matemática para Sistemas Autónomos) - ISEP 2026.
-Consolidação Unificada: Plotly 3D, Vista POV 1ª Pessoa, Cockpit de Instrumentos,
-Filtro Kalman com Suavizador RTS, Análise de Proximidade CPA (< 10m) e Exportação SIG (KML/GeoJSON).
+Carrega a missão e, conforme as opções, corre os testes, exporta os dados,
+compara os interpoladores, gera o HTML autónomo ou abre o dashboard web.
 """
 
 import argparse
@@ -26,7 +25,7 @@ from multi_robot_system.io_export.benchmark_exporter import (
 
 
 def run_test_suite():
-    """Executa a suite completa de 24 testes unitários com pytest."""
+    """Corre os testes automáticos com pytest e para o programa se algum falhar."""
     import subprocess
     print("\n" + "=" * 65)
     print("A EXECUTAR TESTES UNITÁRIOS DE RIGOR MATEMÁTICO (PYTEST)...")
@@ -39,14 +38,14 @@ def run_test_suite():
     print("\nTODOS OS TESTES FORAM VALIDADOS COM SUCESSO (100% APROVAÇÃO)!\n")
 
 
+# Cores atribuídas aos robôs carregados com --dados
 PALETA_CORES = ["#E63946", "#2A9D8F", "#457B9D", "#F4A261", "#9B5DE5", "#FFD166", "#06D6A0", "#EF476F"]
 
 
 def robots_from_files(paths, robots_config=()):
-    """Obtemos: a lista de robots a partir de ficheiros CSV ou de pastas com CSV, sem mexer no YAML.
+    """Esta função cria a lista de robôs a partir de ficheiros CSV (ou pastas com CSV).
 
-    O nome sai do ficheiro: robot7_s2.csv dá Robot 7. Sem número no nome usa-se o nome do ficheiro.
-    Um robot com o mesmo nome que na configuração mantém a sua cor.
+    O nome vem do ficheiro (robot7_s2.csv -> Robot 7); um robô que já existe na configuração mantém a sua cor.
     """
     ficheiros = []
     for p in paths:
@@ -70,21 +69,25 @@ def robots_from_files(paths, robots_config=()):
 
 
 def load_mission(config_path: str, data_paths=None) -> Tuple[MissionDataset, dict]:
-    """Carrega a configuração YAML e os ficheiros CSV com ordenação e suavização RTS."""
+    """Esta função carrega a missão completa a partir do ficheiro de configuração.
+
+    Calcula a origem das coordenadas, lê e suaviza os dados de cada robô
+    e devolve o conjunto de trajetórias e a configuração.
+    """
     with open(config_path, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
 
+    # Ficheiros indicados com --dados: substituem os robôs da configuração e a origem passa a vir dos dados
     if data_paths:
-        # CSV indicados na linha de comandos: substituem a lista de robots do YAML e a origem passa a vir dos dados
         cfg["robots"] = robots_from_files(data_paths, cfg.get("robots", []))
         cfg["selected_robot"] = cfg["robots"][0]["id"]
         cfg["origin"] = dict(cfg["origin"], mode="data_mean")
 
     def _resolve(csv_file: str) -> str:
-        # aceita o caminho como está ou relativo à pasta multi_robot_system
-        # Se for caminho relativo à pasta multi_robot_system
+        # Aceita o caminho tal como está ou relativo à pasta multi_robot_system
         return csv_file if Path(csv_file).is_file() else str(Path("multi_robot_system") / csv_file)
 
+    # Origem das coordenadas locais: fixa (configuração) ou calculada a partir dos dados
     orig = cfg["origin"]
     if orig.get("mode", "fixed") == "data_mean":
         lat0, lon0, h0 = compute_reference_origin([_resolve(r["file"]) for r in cfg["robots"]])
@@ -96,10 +99,10 @@ def load_mission(config_path: str, data_paths=None) -> Tuple[MissionDataset, dic
     print(f"\n[INICIALIZAÇÃO] Origem de Referência: Lat={lat0:.6f}°, Lon={lon0:.6f}°, Alt={h0:.2f}m")
     trajectories = {}
 
+    # Leitura e suavização dos dados de cada robô
     for rob in cfg["robots"]:
         r_id = rob["id"]
         csv_file = rob["file"]
-        # Se for caminho relativo à pasta multi_robot_system
         if not Path(csv_file).is_file():
             csv_file = str(Path("multi_robot_system") / csv_file)
 
@@ -142,6 +145,7 @@ def load_mission(config_path: str, data_paths=None) -> Tuple[MissionDataset, dic
         print(f"     OK ({len(traj.timestamps)} amostras processadas em {dt_ms:.1f}ms, dur={traj.duration_s:.1f}s)")
 
     dataset = MissionDataset(trajectories, lat0, lon0, h0)
+    # Aviso quando os robôs nunca estiveram ativos ao mesmo tempo
     if dataset.has_overlap:
         print(f"[SINCRONIZAÇÃO] Janela temporal comum: {dataset.common_end - dataset.common_start:.1f}s sobreposta.")
     else:
@@ -150,7 +154,8 @@ def load_mission(config_path: str, data_paths=None) -> Tuple[MissionDataset, dic
 
 
 def main():
-    """Ponto de entrada: lê os argumentos, carrega a missão (CSV, Kalman, RTS) e abre o painel web, o HTML ou os testes."""
+    """Lê as opções da linha de comandos e executa as tarefas pedidas."""
+    # Opções disponíveis na linha de comandos
     parser = argparse.ArgumentParser(
         description="TOMSA 2026 - Multi-Robot Subsea Trajectory System (INESC TEC Aguçadoura)"
     )
@@ -171,7 +176,7 @@ def main():
 
     args = parser.parse_args()
 
-    # Se nenhum argumento for passado, executa tudo por omissão
+    # Sem opções: executa tudo
     if len(sys.argv) == 1:
         print("Nenhum argumento especificado. A executar validação completa (--all)...")
         args.all = True
@@ -181,6 +186,7 @@ def main():
 
     dataset, cfg = load_mission(args.config, args.dados)
 
+    # Exportação: CSV sincronizado, GeoJSON e KML
     if args.export or args.all:
         print("\n" + "=" * 65)
         print("A EXPORTAR DADOS GEOESPACIAIS E TELEMETRIA SINCRONIZADA...")
@@ -197,6 +203,7 @@ def main():
         export_mission_to_kml(dataset, kml_out)
         print(f" [3/3] KML 3D (Google Earth) exportado: {kml_out}")
 
+    # Comparação dos interpoladores e tabela LaTeX
     if args.benchmark or args.all:
         print("\n" + "=" * 65)
         print("A EXECUTAR BENCHMARK DE COMPARATIVO DE INTERPOLADORES...")
@@ -215,6 +222,7 @@ def main():
             f.write(latex_tab)
         print("\nTabela LaTeX guardada em: multi_robot_system/output/interpolator_latex_table.tex")
 
+    # Dashboard: ficheiro HTML autónomo e/ou servidor web
     dashboard = MissionWebDashboard(dataset, cfg)
 
     if args.bundle or args.all:
