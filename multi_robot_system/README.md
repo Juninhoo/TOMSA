@@ -40,6 +40,7 @@ PYTHONPATH=. .venv/bin/python3 multi_robot_system/main.py --all
 - **V**: Alterna ciclicamente entre as 5 Vistas (`Global 3D` $\to$ `3ª Pessoa` $\to$ `Cockpit` $\to$ `Distâncias CPA 2D` $\to$ `Encontros e relatório`).
 - **F** / **G**: Seguir o robô selecionado / voltar à vista geral.
 - **P**: Liga ou desliga a previsão de 60 s.
+- **H**: Mostra ou esconde o painel de bordo da Vista 1ª Pessoa (separador 6).
 - **R**: **Reinicia a reprodução das trajetórias** (reset imediato ao início).
 - **Espaço**: Play / Pausa.
 

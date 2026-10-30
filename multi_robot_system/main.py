@@ -7,6 +7,7 @@ Filtro Kalman com Suavizador RTS, Análise de Proximidade CPA (< 10m) e Exporta�
 """
 
 import argparse
+import re
 import sys
 import time
 from pathlib import Path
@@ -38,10 +39,46 @@ def run_test_suite():
     print("\nTODOS OS TESTES FORAM VALIDADOS COM SUCESSO (100% APROVAÇÃO)!\n")
 
 
-def load_mission(config_path: str) -> Tuple[MissionDataset, dict]:
+PALETA_CORES = ["#E63946", "#2A9D8F", "#457B9D", "#F4A261", "#9B5DE5", "#FFD166", "#06D6A0", "#EF476F"]
+
+
+def robots_from_files(paths, robots_config=()):
+    """Obtemos: a lista de robots a partir de ficheiros CSV ou de pastas com CSV, sem mexer no YAML.
+
+    O nome sai do ficheiro: robot7_s2.csv dá Robot 7. Sem número no nome usa-se o nome do ficheiro.
+    Um robot com o mesmo nome que na configuração mantém a sua cor.
+    """
+    ficheiros = []
+    for p in paths:
+        pp = Path(p)
+        if pp.is_dir():
+            ficheiros += sorted(pp.glob("*.csv"))
+        else:
+            ficheiros.append(pp)
+    if not ficheiros:
+        raise SystemExit("Não encontrei ficheiros CSV em: " + ", ".join(str(p) for p in paths))
+    robots, usados = [], set()
+    for k, f in enumerate(ficheiros):
+        m = re.search(r"robot\D*(\d+)", f.stem, re.IGNORECASE)
+        rid = "Robot " + str(int(m.group(1))) if m else f.stem
+        if rid in usados:
+            rid = rid + " (" + f.stem + ")"
+        usados.add(rid)
+        cor = next((r["color"] for r in robots_config if r["id"] == rid), PALETA_CORES[k % len(PALETA_CORES)])
+        robots.append({"id": rid, "file": str(f), "color": cor, "label": rid})
+    return robots
+
+
+def load_mission(config_path: str, data_paths=None) -> Tuple[MissionDataset, dict]:
     """Carrega a configuração YAML e os ficheiros CSV com ordenação e suavização RTS."""
     with open(config_path, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
+
+    if data_paths:
+        # CSV indicados na linha de comandos: substituem a lista de robots do YAML e a origem passa a vir dos dados
+        cfg["robots"] = robots_from_files(data_paths, cfg.get("robots", []))
+        cfg["selected_robot"] = cfg["robots"][0]["id"]
+        cfg["origin"] = dict(cfg["origin"], mode="data_mean")
 
     def _resolve(csv_file: str) -> str:
         # aceita o caminho como está ou relativo à pasta multi_robot_system
@@ -105,7 +142,10 @@ def load_mission(config_path: str) -> Tuple[MissionDataset, dict]:
         print(f"     OK ({len(traj.timestamps)} amostras processadas em {dt_ms:.1f}ms, dur={traj.duration_s:.1f}s)")
 
     dataset = MissionDataset(trajectories, lat0, lon0, h0)
-    print(f"[SINCRONIZAÇÃO] Janela temporal comum: {dataset.common_end - dataset.common_start:.1f}s sobreposta.")
+    if dataset.has_overlap:
+        print(f"[SINCRONIZAÇÃO] Janela temporal comum: {dataset.common_end - dataset.common_start:.1f}s sobreposta.")
+    else:
+        print("[AVISO] Os robots nunca estiveram ativos ao mesmo tempo: não há janela comum, por isso as distâncias e o CPA entre eles não se aplicam.")
     return dataset, cfg
 
 
@@ -117,6 +157,10 @@ def main():
     parser.add_argument(
         "--config", type=str, default="multi_robot_system/config/mission_config.yaml",
         help="Caminho para o ficheiro de configuração YAML"
+    )
+    parser.add_argument(
+        "--dados", nargs="+", metavar="CSV_OU_PASTA",
+        help="Ficheiros CSV (ou uma pasta com CSV) a usar no lugar dos da configuração. Ex.: --dados novos/robot1.csv novos/robot4.csv"
     )
     parser.add_argument("--web", action="store_true", help="Inicia o servidor e abre o Dashboard no browser (Plotly)")
     parser.add_argument("--export", action="store_true", help="Exporta ficheiros GeoJSON (QGIS), KML 3D (Google Earth) e CSV sincronizado")
@@ -135,7 +179,7 @@ def main():
     if args.test or args.all:
         run_test_suite()
 
-    dataset, cfg = load_mission(args.config)
+    dataset, cfg = load_mission(args.config, args.dados)
 
     if args.export or args.all:
         print("\n" + "=" * 65)

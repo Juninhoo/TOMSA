@@ -117,7 +117,7 @@ def compute_reference_origin(file_paths: List[str]) -> Tuple[float, float, float
         lats.append(df["pose.pose.position.x"].values)
         lons.append(df["pose.pose.position.y"].values)
         h_refs.append(float(df["pose.pose.position.z"].iloc[:50].median()))
-    return float(np.mean(np.concatenate(lats))), float(np.mean(np.concatenate(lons))), float(np.mean(h_refs))
+    return float(np.nanmean(np.concatenate(lats))), float(np.nanmean(np.concatenate(lons))), float(np.nanmean(h_refs))
 
 
 def load_single_robot_csv(
@@ -147,8 +147,27 @@ def load_single_robot_csv(
         if col not in df.columns:
             raise ValueError(f"Ficheiro {path.name} não contém a coluna obrigatória '{col}'")
 
+    # Linhas com valores em falta ou ilegíveis nas colunas obrigatórias são ignoradas (e contadas no aviso)
+    df[ODOM_REQUIRED_COLS] = df[ODOM_REQUIRED_COLS].apply(pd.to_numeric, errors="coerce")
+    validas = np.isfinite(df[ODOM_REQUIRED_COLS].values).all(axis=1)
+    if not validas.all():
+        print(f"     [AVISO] {path.name}: {int((~validas).sum())} linhas com valores em falta foram ignoradas")
+        df = df[validas]
+    if len(df) < 2:
+        raise ValueError(f"Ficheiro {path.name}: menos de 2 linhas válidas")
+
     # Ordenação estrita por tempo (preservando registos repetidos conforme Q23)
     df = df.sort_values(by="Time", kind="stable").reset_index(drop=True)
+
+    # Registos com o mesmo instante ficam todos, afastados 1 ms (a interpolação exige tempos estritamente crescentes)
+    tempos = df["Time"].values.astype(float)
+    if np.any(np.diff(tempos) <= 0):
+        n_rep = int(np.sum(np.diff(tempos) <= 0))
+        for i in range(1, len(tempos)):
+            if tempos[i] <= tempos[i - 1]:
+                tempos[i] = tempos[i - 1] + 0.001
+        df["Time"] = tempos
+        print(f"     [AVISO] {path.name}: {n_rep} registos com instante repetido foram afastados 1 ms")
 
     timestamps = df["Time"].values.astype(float)
     lat_deg = df["pose.pose.position.x"].values.astype(float)

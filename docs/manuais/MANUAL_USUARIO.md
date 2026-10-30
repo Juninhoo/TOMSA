@@ -68,7 +68,7 @@ PYTHONPATH=. .venv/bin/python3 multi_robot_system/main.py --all
 
 ---
 
-## 3. As Cinco Vistas do Sistema
+## 3. As Seis Vistas do Sistema
 
 O utilizador pode alternar entre as 5 vistas através dos botões no cabeçalho ou premindo a tecla **`V`**:
 
@@ -105,6 +105,11 @@ O utilizador pode alternar entre as 5 vistas através dos botões no cabeçalho 
 
 ---
 
+### Vista 6: 1ª Pessoa (dentro do submarino)
+- **Câmara**: no nariz do robô selecionado, orientada pela proa, arfagem e rolamento; o próprio casco não se vê.
+- **Painel de bordo (tecla H para esconder)**: fita de rumo com a direção do vizinho mais próximo, profundidade, arfagem, rolamento, velocidades, taxa de viragem e caixa do vizinho mais próximo (distância, azimute, elevação, aproximação e alerta).
+- **Ver pelo vizinho mais próximo**: botão que passa a câmara para o robô mais próximo do atual.
+
 ## 4. Teclas de Atalho Rápidas
 
 | Tecla | Função |
@@ -115,6 +120,7 @@ O utilizador pode alternar entre as 5 vistas através dos botões no cabeçalho 
 | **`V`** | Alterna ciclicamente entre as 5 Vistas: Global 3D $\to$ 3ª Pessoa $\to$ Cockpit $\to$ CPA 2D $\to$ Encontros e relatório |
 | **`F`** / **`G`** | Segue o robot selecionado / volta à vista geral |
 | **`P`** | Liga ou desliga a previsão de 60 s |
+| **`H`** | Mostra ou esconde o painel de bordo da Vista 1ª Pessoa |
 | **`R`** | **Reinicia a reprodução das trajetórias** (reset imediato ao instante inicial) |
 | **Espaço** | **Play / Pausa** da animação |
 

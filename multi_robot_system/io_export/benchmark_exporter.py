@@ -43,7 +43,7 @@ def run_full_interpolator_benchmark(
 
     # Gerar figura comparativa de alta resolução com matplotlib
     try:
-        traj_sample = dataset.trajectories["Robot 1"]
+        traj_sample = next(iter(dataset.trajectories.values()))
         t_sub = traj_sample.timestamps[:120]
         pos_sub = traj_sample.pos_ned[:, :120]
 

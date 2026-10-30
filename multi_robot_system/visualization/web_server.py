@@ -34,6 +34,7 @@ from multi_robot_system.visualization.plotly_views import (
     create_pov_camera_figure,
     create_proximity_timeline_figure,
     build_submarine_mesh,
+    build_submarine_lettering,
     get_scene_geometry,
     BODY_AXIS_LENGTH_M
 )
@@ -51,6 +52,8 @@ class MissionWebDashboard:
 
         self.robots = list(dataset.trajectories.keys())
         self.active_robot = config.get("selected_robot", self.robots[0])
+        if self.active_robot not in self.robots:      # o robô escolhido na configuração pode não existir nos dados novos
+            self.active_robot = self.robots[0]
         self.active_view = "global"  # 'global', 'pov', 'cockpit'
 
         # Linha temporal completa da missão: cada robô opera numa janela própria (só se sobrepõem em parte)
@@ -75,6 +78,8 @@ class MissionWebDashboard:
 
         div_global = pio.to_html(fig_global, div_id="plot-global", full_html=False, include_plotlyjs="cdn")
         div_pov = pio.to_html(fig_pov, div_id="plot-pov", full_html=False, include_plotlyjs=False)
+        fig_fp = create_pov_camera_figure(self.dataset, t_eval, self.active_robot)   # mesma cena 3D, câmara em 1ª pessoa feita em JS
+        div_fp = pio.to_html(fig_fp, div_id="plot-fp", full_html=False, include_plotlyjs=False)
         div_cockpit = '<div id="cockpit-root"></div>'   # o Cockpit é desenhado no browser (SVG), sem figura Plotly
         div_prox = pio.to_html(fig_prox, div_id="plot-prox", full_html=False, include_plotlyjs=False)
         div_report = '<div id="report-root"></div>'   # o relatório é desenhado no browser a partir dos números de Python
@@ -109,6 +114,7 @@ class MissionWebDashboard:
             "axis_length_m": BODY_AXIS_LENGTH_M,   # comprimento das setas x, y, z do corpo [m]
             "collision_threshold_m": danger_m,     # abaixo disto: PERIGO DE COLISÃO (vermelho)
             "proximity_warning_m": warning_m,      # abaixo disto: ATENÇÃO, robots próximos (amarelo)
+            "contact_distance_m": float(spatial_cfg.get("contact_distance_m", 2.0)),   # abaixo disto: COLISÃO
             # alcance inicial do radar da Vista 3ª Pessoa [m] (botões - / +: 50/100/250/500/1000 m)
             "radar_range_m": float(spatial_cfg.get("radar_range_m", 100.0)),
             "robots": {}
@@ -159,6 +165,7 @@ class MissionWebDashboard:
             origin_txt = "não indicada"
         timeline_dict["origin"] = {"text": origin_txt}
         timeline_dict["sub_mesh"] = build_submarine_mesh()
+        timeline_dict["sub_text"] = build_submarine_lettering()
         timeline_dict["report"] = compute_mission_report(self.dataset, danger_m, warning_m)
         timeline_json = json.dumps(timeline_dict)
 
@@ -380,6 +387,30 @@ class MissionWebDashboard:
         .ck-tw th { color: #6d83a6; text-align: left; font-size: 10.5px; letter-spacing: 1px; text-transform: uppercase; padding: 5px 8px; border-bottom: 1px solid #1d2f4d; white-space: nowrap; }
         .ck-tw td { padding: 6px 8px; border-bottom: 1px solid #1d2f4d; white-space: nowrap; }
         .ck-tw .n { text-align: right; font-family: monospace; }
+        /* ---- Separador 6: Vista 1ª Pessoa, painel de bordo de submarino ---- */
+        #panel-fp { position: relative; }
+        #fp-hud { position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events: none; z-index: 20; font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+        #fp-hud::before { content: ""; position: absolute; top: 0; left: 0; right: 0; bottom: 0; border-radius: 8px;
+            box-shadow: inset 0 0 0 3px #0e2a47, inset 0 0 120px rgba(8,60,90,0.55), inset 0 0 0 9px rgba(39,195,221,0.18);
+            background: radial-gradient(ellipse at center, rgba(0,0,0,0) 62%, rgba(2,12,24,0.55) 100%); }
+        #fp-hud.off::before { display: none; }
+        #hud-dyn { position: absolute; top: 0; left: 0; right: 0; bottom: 0; }
+        .hud-tape { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); max-width: 96%; }
+        .hud-tape svg { display: block; max-width: 100%; height: auto; }
+        .hud-box { position: absolute; top: 50%; transform: translateY(-50%); background: rgba(6,18,34,0.62); border: 1px solid #27c3dd66; border-radius: 6px; padding: 8px 12px; min-width: 150px; }
+        .hud-l { left: 28px; } .hud-r { right: 28px; }
+        .hud-t { color: #27c3dd; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; font-size: 12px; margin-bottom: 4px; }
+        .hud-k { color: #9db0cc; font-size: 10.5px; letter-spacing: 0.8px; text-transform: uppercase; margin-top: 5px; }
+        .hud-v { color: #e6edf7; font-family: monospace; font-size: 19px; font-weight: 700; }
+        .hud-nb { position: absolute; left: 50%; bottom: 62px; transform: translateX(-50%); max-width: 92%; text-align: center; padding: 8px 16px; border-radius: 6px; font-size: 13px; color: #e6edf7; background: rgba(6,18,34,0.7); border: 1px solid #27c3dd66; }
+        .hud-nb.warn { background: rgba(70,52,8,0.85); border-color: #e8a838; color: #ffd78a; }
+        .hud-nb.crit { background: rgba(120,18,28,0.9); border-color: #ff5a67; color: #fff; animation: proximity-pulse 0.8s ease-in-out infinite alternate; }
+        .hud-nb.none { color: #9db0cc; }
+        .hud-msg { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center; font-size: 20px; font-weight: 700; color: #e6edf7; background: rgba(6,18,34,0.78); border: 1px solid #27c3dd66; padding: 14px 24px; border-radius: 8px; }
+        .hud-msg span { font-size: 13px; font-weight: 400; color: #9db0cc; }
+        .hud-btns { position: absolute; right: 28px; bottom: 18px; display: flex; gap: 8px; pointer-events: auto; }
+        .hud-btns button { background: rgba(6,18,34,0.85); border-color: #27c3dd88; padding: 6px 12px; font-size: 12px; }
+        .hud-btns button:hover { background: #12304f; }
         /* ---- Separador 5: encontros e relatório ---- */
         #report-root { overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 12px; background: #0a1220; }
         #report-root > * { flex-shrink: 0; }
@@ -403,11 +434,10 @@ class MissionWebDashboard:
             <button id="btn-cockpit" onclick="setView('cockpit')">3. Cockpit / Controlo</button>
             <button id="btn-prox" onclick="setView('prox')">4. Distâncias CPA 2D</button>
             <button id="btn-report" onclick="setView('report')">5. Encontros e relatório</button>
+            <button id="btn-fp" onclick="setView('fp')">6. Vista 1ª Pessoa</button>
             
             <span style="font-size: 12px; color: #9ca3af; margin-left: 12px; margin-right: 4px;">ROBÔ:</span>
-            <button id="btn-r1" class="active" onclick="setRobot('Robot 1')">Robot 1</button>
-            <button id="btn-r4" onclick="setRobot('Robot 4')">Robot 4</button>
-            <button id="btn-r7" onclick="setRobot('Robot 7')">Robot 7</button>
+            <span id="robot-buttons"></span>
         </div>
     </header>
 
@@ -416,6 +446,7 @@ class MissionWebDashboard:
         <button id="btn-reset" class="danger" onclick="resetTrajectory()">&#8634; Reiniciar (R)</button>
         <button id="btn-follow" onclick="toggleFollow()" title="A câmara da Vista Global segue o robô selecionado">&#9737; Seguir (F)</button>
         <button id="btn-overview" onclick="overviewCamera()" title="Volta à vista de cima com os 3 robôs">&#9635; Vista geral (G)</button>
+        <button id="btn-freeze" class="danger" style="display:none" onclick="toggleFreeze()" title="Depois da colisão os dois robots ficam parados. Carregar outra vez mostra os dados reais.">Robots parados (C)</button>
         <button id="btn-predict" class="active" onclick="togglePredict()" title="Mostra onde cada robô estará daqui a 60 s se mantiver a velocidade">&#10140; Previsão 60 s (P)</button>
         
         <div class="slider-box">
@@ -480,6 +511,16 @@ class MissionWebDashboard:
         <div id="panel-report" class="view-panel">
             __DIV_REPORT__
         </div>
+        <div id="panel-fp" class="view-panel">
+            __DIV_FP__
+            <div id="fp-hud">
+                <div id="hud-dyn"></div>
+                <div class="hud-btns">
+                    <button onclick="firstPersonNearest()" title="Passa a ver o mar pelos olhos do robô mais próximo">Ver pelo vizinho mais próximo</button>
+                    <button id="btn-hud" onclick="toggleHud()">Painel de bordo: sim (H)</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <div class="help-banner">
@@ -523,6 +564,21 @@ class MissionWebDashboard:
 
         let currentView = 'global';
         let currentRobot = '__ACTIVE_ROBOT__';
+        if (!timeline.robots[currentRobot]) currentRobot = robotKeys[0];
+
+        // Obtemos: os botões dos robôs saem dos dados carregados, por isso servem quaisquer nomes e qualquer número de robots.
+        (function buildRobotButtons() {
+            const holder = document.getElementById('robot-buttons');
+            robotKeys.forEach((id, i) => {
+                const b = document.createElement('button');
+                b.id = 'btn-robot-' + i;
+                b.textContent = id;
+                b.title = 'Tecla ' + (i + 1);
+                if (id === currentRobot) b.classList.add('active');
+                b.onclick = () => setRobot(id);
+                holder.appendChild(b);
+            });
+        })();
         let isPlaying = false;
         let speed = 1.0;
         let currentTime = t0_base;
@@ -609,6 +665,21 @@ class MissionWebDashboard:
             }
             return { x: X, y: Y, z: Z };
         }
+        // Método: as letras (guardadas no referencial do corpo, com null a separar os traços) rodam e deslocam-se
+        // exatamente como os vértices do casco; os null passam sem conta.
+        // Obtemos: o texto INESC TEC colado ao casco, a acompanhar a atitude do robô.
+        function subLettersAt(s, scale) {
+            const M = timeline.sub_text, ax = bodyAxesNED(s), n = M.x.length;
+            const X = new Array(n), Y = new Array(n), Z = new Array(n);
+            for (let q = 0; q < n; q++) {
+                if (M.x[q] === null) { X[q] = null; Y[q] = null; Z[q] = null; continue; }
+                const px = M.x[q] * scale, py = M.y[q] * scale, pz = M.z[q] * scale;
+                X[q] = s.E + px * ax[0][1] + py * ax[1][1] + pz * ax[2][1];
+                Y[q] = s.N + px * ax[0][0] + py * ax[1][0] + pz * ax[2][0];
+                Z[q] = s.D + px * ax[0][2] + py * ax[1][2] + pz * ax[2][2];
+            }
+            return { x: X, y: Y, z: Z };
+        }
         // Cor do casco: a do robot, mais clara no robot selecionado
         // Obtemos: a cor do casco (a do robô; o robô selecionado fica 12 por cento mais claro).
         function hullColor(id) {
@@ -619,30 +690,34 @@ class MissionWebDashboard:
         }
 
         // ---------- Cena 3D (Vista Global e Vista 3ª Pessoa partilham o mesmo código) ----------
+        // Opacidade de um robô sem dados neste instante (ainda não começou ou já acabou). 1.0 = igual aos outros.
+        const INACTIVE_OPACITY = 0.45;
         const lastKeys = {};
         let frameCount = 0;
         // Método: reescrever com Plotly.restyle só as coordenadas dos traços que mudam (mais leve do que refazer o
         // gráfico). Ordem dos traços: 0 superfície, 1 fundo, 2+3i rasto, 3+3i marcador, 4+3i casco,
-        // 2+3N+i rota completa, 2+4N+3i+a setas dos eixos, 2+7N+i previsão (i = robô, N = nº de robôs).
+        // 2+3N+i rota completa, 2+4N+3i+a setas dos eixos, 2+7N+i previsão, 2+8N+i letras (i = robô, N = nº de robôs).
         // Obtemos: a cena 3D no instante f, igual para a Vista Global e para a 3ª Pessoa (thirdPerson = true
         // põe os cascos 1.5 vezes maiores e liga a câmara de 3ª pessoa).
-        function updateScene(gdId, f, thirdPerson) {
+        function updateScene(gdId, f, thirdPerson, firstPerson) {
             const gd = document.getElementById(gdId);
             if (!gd || !gd.data) return;
             frameCount++;
-            const hull = thirdPerson ? 1.5 : 1.0;           // na 3ª pessoa os cascos são desenhados um pouco maiores
+            const hull = firstPerson ? 3.0 : (thirdPerson ? 1.5 : 1.0);           // na 3ª pessoa os cascos são desenhados um pouco maiores
             const traceIdx = [], X = [], Y = [], Z = [];
             const i0 = Math.floor(f);
             const activeFlags = [];
             const markerTraceIdx = [], markerOpacity = [], markerText = [], fadeOpacity = [], fadeTraceIdx = [];
             const axisBase = 2 + 4 * robotKeys.length;      // as setas dos eixos vêm depois das rotas completas
+            const lettersBase = 2 + 8 * robotKeys.length;   // as letras INESC TEC vêm depois da previsão
             const predBase = 2 + 7 * robotKeys.length;      // as linhas de previsão vêm depois das setas
 
             robotKeys.forEach((id, i) => {
                 const r = timeline.robots[id];
                 const s = stateAt(r, f);
                 const act = isActive(r, f);
-                const own = thirdPerson && id === currentRobot;    // o robô seguido pela câmara da 3ª pessoa
+                const own = thirdPerson && id === currentRobot;
+                const hideSelf = firstPerson && id === currentRobot;   // por dentro, o próprio casco não se vê    // o robô seguido pela câmara da 3ª pessoa
                 activeFlags.push(act ? 1 : 0);
 
                 // Rasto progressivo: só a parte já percorrida pelo robô
@@ -663,8 +738,13 @@ class MissionWebDashboard:
                     X.push([s.E, s.E + L * axes[a][1]]);
                     Y.push([s.N, s.N + L * axes[a][0]]);
                     Z.push([s.D, s.D + L * axes[a][2]]);
-                    fadeTraceIdx.push(axisBase + 3 * i + a); fadeOpacity.push((act ? 1.0 : 0.25));
+                    fadeTraceIdx.push(axisBase + 3 * i + a); fadeOpacity.push((hideSelf ? 0.0 : (act ? 1.0 : INACTIVE_OPACITY)));
                 }
+
+                // Letras INESC TEC coladas ao casco
+                const lt = subLettersAt(s, hull);
+                traceIdx.push(lettersBase + i); X.push(lt.x); Y.push(lt.y); Z.push(lt.z);
+                fadeTraceIdx.push(lettersBase + i); fadeOpacity.push(hideSelf ? 0.0 : (act ? 1.0 : INACTIVE_OPACITY));
 
                 // Previsão em linha reta com a velocidade estimada, durante PRED_H segundos (pára à superfície)
                 traceIdx.push(predBase + i);
@@ -675,14 +755,14 @@ class MissionWebDashboard:
                     X.push([s.E, s.E + horizonS * pvE]); Y.push([s.N, s.N + horizonS * pvN]); Z.push([s.D, s.D + horizonS * pvD]);
                 } else { X.push([]); Y.push([]); Z.push([]); }
 
-                markerTraceIdx.push(3 + 3 * i); markerOpacity.push((act ? 1.0 : 0.25));
+                markerTraceIdx.push(3 + 3 * i); markerOpacity.push((hideSelf ? 0.0 : (act ? 1.0 : INACTIVE_OPACITY)));
                 // o robô seguido já tem o painel de estatísticas: não repete a etiqueta na cena
                 markerText.push([own ? '' : (act ? ('<b>' + id + '</b><br>' + s.spd.toFixed(1) + ' m/s') : ('<b>' + id + '</b><br>inativo'))]);
-                fadeTraceIdx.push(4 + 3 * i); fadeOpacity.push((act ? 1.0 : 0.25));
+                fadeTraceIdx.push(4 + 3 * i); fadeOpacity.push((hideSelf ? 0.0 : (act ? 1.0 : INACTIVE_OPACITY)));
             });
             Plotly.restyle(gd, { x: X, y: Y, z: Z }, traceIdx);
 
-            const key = activeFlags.join('') + (thirdPerson ? currentRobot : '');
+            const key = activeFlags.join('') + ((thirdPerson || firstPerson) ? currentRobot : '');
             if (key !== lastKeys[gdId] || (frameCount % 8) === 0) {
                 lastKeys[gdId] = key;
                 Plotly.restyle(gd, { 'marker.opacity': markerOpacity, text: markerText }, markerTraceIdx);
@@ -690,6 +770,7 @@ class MissionWebDashboard:
             }
 
             if (thirdPerson) setThirdPersonCamera(gd, f);
+            else if (firstPerson) setFirstPersonCamera(gd, f);
             else if (followOn) followCamera(gd, f);
         }
 
@@ -750,6 +831,30 @@ class MissionWebDashboard:
             if (gd && gd.data) {
                 Plotly.relayout(gd, { 'scene.camera': { eye: { x: 1.25, y: 1.25, z: 1.25 }, center: { x: 0, y: 0, z: 0 }, up: { x: 0, y: 0, z: 1 }, projection: { type: 'perspective' } } });
             }
+        }
+
+        // ---------- Câmara em 1ª pessoa (dentro do submarino) ----------
+        // Método: a proa (eixo x do corpo) e o eixo z do corpo escrevem-se no mundo NED com yaw, pitch e roll.
+        // O olho fica 4 m à frente do centro (no nariz) e 1 m acima do eixo; olha ao longo da proa, e o "para cima"
+        // da câmara é o oposto do eixo z do corpo, por isso a imagem inclina com o rolamento e a arfagem do robô.
+        // Obtemos: o que o robô veria da janela da frente, com o horizonte a rodar como a atitude medida.
+        function setFirstPersonCamera(gd, f) {
+            const act = timeline.robots[currentRobot];
+            if (!act) return;
+            const s = stateAt(act, f);
+            const G = timeline.scene, k = 1.0 / G.span;
+            const psi = s.yaw * DEG, the = s.pitch * DEG, phi = s.roll * DEG;
+            const cPsi = Math.cos(psi), sPsi = Math.sin(psi), cThe = Math.cos(the), sThe = Math.sin(the);
+            const cPhi = Math.cos(phi), sPhi = Math.sin(phi);
+            // proa (eixo x do corpo) e eixo z do corpo (para baixo) no mundo NED
+            const fN = cThe * cPsi, fE = cThe * sPsi, fD = -sThe;
+            const zN = cPhi * sThe * cPsi + sPhi * sPsi, zE = cPhi * sThe * sPsi - sPhi * cPsi, zD = cPhi * cThe;
+            const eyeE = s.E + fE * 4.0, eyeN = s.N + fN * 4.0, eyeD = s.D + fD * 4.0 - 1.0;   // nariz, 1 m acima do eixo
+            const eye = { x: (eyeE - G.cE) * k, y: (eyeN - G.cN) * k, z: -(eyeD - G.cD) * k };
+            const L = 0.1;
+            const center = { x: eye.x + fE * L, y: eye.y + fN * L, z: eye.z - fD * L };
+            const up = { x: -zE, y: -zN, z: zD };
+            Plotly.relayout(gd, { 'scene.camera': { eye: eye, center: center, up: up, projection: { type: 'perspective' } } });
         }
 
         // ---------- Câmara em 3ª pessoa ----------
@@ -1518,6 +1623,113 @@ class MissionWebDashboard:
             updateFrame(curF());
         }
 
+        // ---------- Painel de bordo da Vista 1ª Pessoa ----------
+        // Por cima da câmara 3D: janela do submarino, fita de rumo, profundidade, velocidade e vizinho mais próximo.
+        let hudOn = true;
+        const HUD_SPAN = 35;     // metade do campo de rumos da fita [graus]
+        const HUD_PX = 8;        // pixels por grau na fita
+        const HUD_NAMES = { 0: 'N', 45: 'NE', 90: 'E', 135: 'SE', 180: 'S', 225: 'SO', 270: 'O', 315: 'NO' };
+
+        // Método: para cada outro robô ativo, distância 3D, azimute e elevação (rodando o vetor para o corpo com
+        // toBody), rumo absoluto e aproximação = menos (d·rv) a dividir pela distância; guarda-se o mais próximo.
+        // Obtemos: o vizinho mais próximo com tudo o que o painel de bordo mostra.
+        function nearestNeighbour(id, f) {
+            const me = timeline.robots[id];
+            if (!me || !isActive(me, f)) return null;
+            const s = fullStateAt(me, f);
+            let best = null;
+            robotKeys.forEach(function (o) {
+                if (o === id) return;
+                const ro = timeline.robots[o];
+                if (!isActive(ro, f)) return;
+                const t = fullStateAt(ro, f);
+                const dN = t.N - s.N, dE = t.E - s.E, dD = t.D - s.D;
+                const rng = Math.hypot(dN, dE, dD);
+                if (best !== null && rng >= best.rng) return;
+                const b = toBody(s, dN, dE, dD);
+                const dot = dN * (t.vN - s.vN) + dE * (t.vE - s.vE) + dD * (t.vD - s.vD);
+                best = {
+                    id: o, color: ro.color, rng: rng,
+                    az: Math.atan2(b.y, b.x) / DEG, el: Math.atan2(-b.z, Math.hypot(b.x, b.y)) / DEG,
+                    brg: wrap360(Math.atan2(dE, dN) / DEG), clos: -dot / Math.max(rng, 1e-6)
+                };
+            });
+            return best;
+        }
+
+        // Método: desenhar em SVG uma régua de rumos que desliza (HUD_PX píxeis por grau), com o rumo atual ao centro
+        // e um losango na direção do vizinho (uma seta no bordo se estiver fora do campo).
+        // Obtemos: a fita de rumo, como a de um avião, a mostrar para onde fica o vizinho.
+        function hudTape(hdg, nb) {
+            const W = 2 * HUD_SPAN * HUD_PX, H = 74, cx = W / 2;
+            let g = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '">';
+            g += '<rect x="0" y="14" width="' + W + '" height="32" rx="4" fill="rgba(6,18,34,.66)" stroke="' + COCKPIT_COLORS.cy + '" stroke-opacity=".55"/>';
+            for (let k = Math.ceil(hdg - HUD_SPAN); k <= Math.floor(hdg + HUD_SPAN); k++) {
+                if (k % 5 !== 0) continue;
+                const x = (cx + (k - hdg) * HUD_PX).toFixed(1), a = wrap360(k), major = (a % 10 === 0);
+                g += '<line x1="' + x + '" y1="46" x2="' + x + '" y2="' + (major ? 36 : 41) + '" stroke="' + COCKPIT_COLORS.ink2 + '" stroke-width="1.2"/>';
+                if (HUD_NAMES[a] !== undefined) g += '<text x="' + x + '" y="32" text-anchor="middle" font-size="14" font-weight="800" fill="' + COCKPIT_COLORS.cy + '">' + HUD_NAMES[a] + '</text>';
+                else if (major) g += '<text x="' + x + '" y="32" text-anchor="middle" font-size="11" fill="' + COCKPIT_COLORS.ink2 + '" font-family="monospace">' + a + '</text>';
+            }
+            g += '<polygon points="' + (cx - 7) + ',3 ' + (cx + 7) + ',3 ' + cx + ',14" fill="' + COCKPIT_COLORS.amber + '"/>';
+            g += '<text x="' + cx + '" y="68" text-anchor="middle" font-size="17" font-weight="700" fill="' + COCKPIT_COLORS.ink + '" font-family="monospace">RUMO ' + fmt1(hdg) + '°</text>';
+            if (nb) {
+                const dl = wrap180(nb.brg - hdg);
+                if (Math.abs(dl) <= HUD_SPAN) {
+                    const x = cx + dl * HUD_PX;
+                    g += '<polygon points="' + x.toFixed(1) + ',17 ' + (x + 7).toFixed(1) + ',24 ' + x.toFixed(1) + ',31 ' + (x - 7).toFixed(1) + ',24" fill="' + nb.color + '" stroke="' + COCKPIT_COLORS.ink + '" stroke-width="1.3"/>';
+                } else if (dl < 0) {
+                    g += '<polygon points="5,24 16,17 16,31" fill="' + nb.color + '" stroke="' + COCKPIT_COLORS.ink + '" stroke-width="1"/>';
+                } else {
+                    g += '<polygon points="' + (W - 5) + ',24 ' + (W - 16) + ',17 ' + (W - 16) + ',31" fill="' + nb.color + '" stroke="' + COCKPIT_COLORS.ink + '" stroke-width="1"/>';
+                }
+            }
+            return g + '</svg>';
+        }
+
+        // Método: reconstruir o HTML do painel com os valores do instante f (fullStateAt do robô e nearestNeighbour).
+        // Obtemos: fita de rumo, caixas com profundidade, arfagem, rolamento, velocidades e taxa de viragem, e a
+        // caixa do vizinho mais próximo (amarela abaixo do aviso, vermelha a piscar abaixo do limiar de colisão).
+        function updateFirstPersonHud(f) {
+            const root = document.getElementById('fp-hud'), dyn = document.getElementById('hud-dyn');
+            if (!root || !dyn) return;
+            root.classList.toggle('off', !hudOn);
+            if (!hudOn) { dyn.innerHTML = ''; return; }
+            const r = timeline.robots[currentRobot];
+            if (!r || !isActive(r, f)) {
+                dyn.innerHTML = '<div class="hud-msg">' + currentRobot + ' sem dados neste instante<br><span>dados de ' + fmtElapsed(r.k0 * dt_step) + ' a ' + fmtElapsed(r.k1 * dt_step) + '</span></div>';
+                return;
+            }
+            const s = fullStateAt(r, f), nb = nearestNeighbour(currentRobot, f);
+            const danger = timeline.collision_threshold_m, warn = timeline.proximity_warning_m;
+            const lv = nb === null ? 'none' : (nb.rng < danger ? 'crit' : (nb.rng < warn ? 'warn' : 'safe'));
+            const kv = function (k, v) { return '<div class="hud-k">' + k + '</div><div class="hud-v">' + v + '</div>'; };
+            let h = '<div class="hud-tape">' + hudTape(wrap360(s.yaw), nb) + '</div>';
+            h += '<div class="hud-box hud-l"><div class="hud-t">' + currentRobot + '</div>' + kv('Profundidade', fmt1(s.D) + ' m') +
+                kv('Arfagem (pitch)', fmt1(s.pitch) + '°') + kv('Rolamento (roll)', fmt1(s.roll) + '°') + '</div>';
+            h += '<div class="hud-box hud-r">' + kv('Velocidade estimada', fmt2(s.spd) + ' m/s') + kv('Velocidade medida', fmt2(s.u) + ' m/s') +
+                kv('Taxa de viragem', fmt1(s.turn) + ' °/s') + '</div>';
+            if (nb === null) h += '<div class="hud-nb none">Sem outros robots ativos neste instante</div>';
+            else h += '<div class="hud-nb ' + lv + '"><b style="color:' + nb.color + '">&#9670;</b> Vizinho mais próximo: <b>' + nb.id + '</b> &nbsp; ' +
+                '<b>' + nb.rng.toFixed(1) + ' m</b> &nbsp; azimute <b>' + (nb.az >= 0 ? '+' : '') + fmt1(nb.az) + '°</b> &nbsp; elevação <b>' + (nb.el >= 0 ? '+' : '') + fmt1(nb.el) + '°</b>' +
+                ' &nbsp; aproximação <b>' + (nb.clos >= 0 ? '+' : '') + fmt2(nb.clos) + ' m/s</b>' +
+                (lv === 'crit' ? ' &nbsp; <b>PERIGO DE COLISÃO</b>' : (lv === 'warn' ? ' &nbsp; <b>ATENÇÃO</b>' : '')) + '</div>';
+            dyn.innerHTML = h;
+        }
+
+        // Obtemos: o atalho H (mostra ou esconde o painel de bordo).
+        function toggleHud() {
+            hudOn = !hudOn;
+            document.getElementById('btn-hud').innerHTML = 'Painel de bordo: ' + (hudOn ? 'sim' : 'não') + ' (H)';
+            updateFrame(curF());
+        }
+
+        // Obtemos: passa a ver o mar pelo robô mais próximo do atual (os olhos do vizinho).
+        function firstPersonNearest() {
+            const nb = nearestNeighbour(currentRobot, curF());
+            if (nb) setRobot(nb.id);
+        }
+
         // ---------- Separador 5: encontros e relatório da missão ----------
         // Os números vêm de Python (mission_report.py): posições suavizadas, grelha de 1 s, distância 3D.
         let reportBuilt = false;
@@ -1566,6 +1778,10 @@ class MissionWebDashboard:
                 'Menor distância da missão: ' + best.d_min.toFixed(1) + ' m (' + pairLabel(best) + ', aos ' + reportTime(best.t_min) + ')') + '</span>' +
                 '<span style="font-weight:600;letter-spacing:0;text-transform:none">' + enc.length + ' encontros abaixo de ' + T.encounter + ' m · ' +
                 nWarn + ' de atenção (abaixo de ' + T.warning + ' m) · ' + nDanger + ' de perigo (abaixo de ' + T.danger + ' m) · ' + R.jumps.length + ' saltos de posição</span></div>';
+
+            if (collision !== null) {
+                h += '<div class="ck-alert crit"><span>COLISÃO: ' + collisionText() + '</span><span style="font-weight:600;letter-spacing:0;text-transform:none">abaixo de ' + (timeline.contact_distance_m || 2.0) + ' m' + (freezeOn ? ' · os dois robots ficam parados' : ' · dados reais') + '</span></div>';
+            }
 
             // Robots
             h += panelHtml('', 'Robots e janelas de dados', '<div class="ck-tw"><table><thead><tr><th>Robot</th><th class="n">Dados de</th><th class="n">até</th><th class="n">Duração</th><th class="n">Amostras</th><th class="n">Profundidade máxima (m)</th><th class="n">Saltos de posição</th></tr></thead><tbody>' +
@@ -1673,6 +1889,79 @@ class MissionWebDashboard:
             Plotly.relayout(gd, { 'shapes[1].x0': tRel, 'shapes[1].x1': tRel });
         }
 
+
+        // ---------- Colisão ----------
+        // Método: para cada par de robôs ativos, percorrer a grelha de tempo e guardar o primeiro instante em que a
+        // distância 3D fica abaixo de contact_distance_m, com a distância nesse instante.
+        // Obtemos: collision (ou null). Se existir, o Play pára nesse instante, aparece a faixa COLISÃO e os dois robôs
+        // ficam parados (as séries deles repetem o valor do instante da colisão). O botão volta aos dados reais.
+        let collision = null;
+        let freezeOn = true;
+        const collisionOrig = {};
+        const FREEZE_KEYS = ['N', 'E', 'D', 'roll', 'pitch', 'yaw', 'spd', 'turn', 'dist', 'vN', 'vE', 'vD', 'u', 'v', 'w', 'sig'];
+        const ZERO_KEYS = ['spd', 'turn', 'vN', 'vE', 'vD', 'u', 'v', 'w'];
+
+        function pairDistance(ra, rb, k) {
+            const dn = ra.N[k] - rb.N[k], de = ra.E[k] - rb.E[k], dd = ra.D[k] - rb.D[k];
+            return Math.sqrt(dn * dn + de * de + dd * dd);
+        }
+
+        function detectCollision() {
+            const lim = timeline.contact_distance_m || 2.0;
+            let best = null;
+            for (let i = 0; i < robotKeys.length; i++) {
+                for (let j = i + 1; j < robotKeys.length; j++) {
+                    const ra = timeline.robots[robotKeys[i]], rb = timeline.robots[robotKeys[j]];
+                    for (let k = 0; k < numSteps; k++) {
+                        if (!(isActive(ra, k) && isActive(rb, k))) continue;
+                        if (pairDistance(ra, rb, k) < lim) {
+                            if (best === null || k < best.k) best = { k: k, a: robotKeys[i], b: robotKeys[j] };
+                            break;
+                        }
+                    }
+                }
+            }
+            if (best === null) return;
+            const ra = timeline.robots[best.a], rb = timeline.robots[best.b];
+            collision = { k: best.k, t: t0_base + best.k * dt_step, a: best.a, b: best.b, d: pairDistance(ra, rb, best.k) };
+            document.getElementById('btn-freeze').style.display = '';
+            applyCollisionFreeze();
+        }
+
+        // Obtemos: os dois robôs da colisão parados (freezeOn) ou com os dados reais (guardados em collisionOrig).
+        function applyCollisionFreeze() {
+            if (!collision) return;
+            const kc = collision.k;
+            [collision.a, collision.b].forEach(id => {
+                const r = timeline.robots[id];
+                if (!collisionOrig[id]) collisionOrig[id] = {};
+                FREEZE_KEYS.forEach(key => {
+                    if (!collisionOrig[id][key]) collisionOrig[id][key] = r[key];
+                    const src = collisionOrig[id][key];
+                    if (!freezeOn) { r[key] = src; return; }
+                    const out = src.slice(0, kc + 1);
+                    const hold = ZERO_KEYS.indexOf(key) >= 0 ? 0 : src[kc];
+                    for (let k = kc + 1; k < src.length; k++) out.push(hold);
+                    r[key] = out;
+                });
+            });
+            const b = document.getElementById('btn-freeze');
+            b.textContent = freezeOn ? 'Robots parados (C)' : 'Dados reais (C)';
+            b.classList.toggle('active', !freezeOn);
+        }
+
+        function toggleFreeze() {
+            if (!collision) return;
+            freezeOn = !freezeOn;
+            applyCollisionFreeze();
+            updateFrame(curF());
+        }
+
+        // Obtemos: texto da colisão para a faixa e para o relatório.
+        function collisionText() {
+            return collision.a + ' e ' + collision.b + ' aos ' + fmtElapsed(collision.t - t0_base) + ': <b>' + collision.d.toFixed(1) + ' m</b>';
+        }
+
         // ---------- Aviso de proximidade (Vista Global e Vista 3ª Pessoa) ----------
         // Amarelo: dois robôs ativos a menos de proximity_warning_m. Vermelho a piscar: menos de collision_threshold_m.
         // Método: para cada par de robôs ativos, distância 3D = raiz de (dN2 + dE2 + dD2).
@@ -1680,7 +1969,8 @@ class MissionWebDashboard:
         function updateProximityBanner(f) {
             const box = document.getElementById('proximity-banner');
             if (!box) return;
-            if (currentView !== 'global' && currentView !== 'pov') { box.style.display = 'none'; return; }
+            if (currentView !== 'global' && currentView !== 'pov' && currentView !== 'fp') { box.style.display = 'none'; return; }
+            box.style.top = (currentView === 'fp' && hudOn) ? '124px' : '28px';   // na 1ª pessoa fica por baixo da fita de rumo
             const act = robotKeys.filter(id => isActive(timeline.robots[id], f));
             const near = [];
             for (let i = 0; i < act.length; i++) {
@@ -1690,12 +1980,15 @@ class MissionWebDashboard:
                     if (d < timeline.proximity_warning_m) near.push({ a: act[i], b: act[j], d: d });
                 }
             }
-            if (near.length === 0) { box.style.display = 'none'; return; }
+            const col = (collision !== null && currentTime >= collision.t) ? collision : null;
+            if (near.length === 0 && col === null) { box.style.display = 'none'; return; }
             near.sort((p, q) => p.d - q.d);
-            const danger = near[0].d < timeline.collision_threshold_m;
+            const danger = col !== null || near[0].d < timeline.collision_threshold_m;
             box.className = danger ? 'danger' : 'warning';
-            box.innerHTML = '<div class="title">&#9888; ' + (danger ? 'PERIGO DE COLISÃO' : 'ATENÇÃO: ROBOTS PRÓXIMOS') + '</div>' +
-                near.map(p => '<div>' + p.a + ' e ' + p.b + ': <b>' + p.d.toFixed(1) + ' m</b></div>').join('');
+            const outros = col === null ? near : near.filter(p => !(p.a === col.a && p.b === col.b));
+            box.innerHTML = '<div class="title">&#9888; ' + (col !== null ? 'COLISÃO' : (danger ? 'PERIGO DE COLISÃO' : 'ATENÇÃO: ROBOTS PRÓXIMOS')) + '</div>' +
+                (col !== null ? '<div>' + collisionText() + (freezeOn ? ' · robots parados' : '') + '</div>' : '') +
+                outros.map(p => '<div>' + p.a + ' e ' + p.b + ': <b>' + p.d.toFixed(1) + ' m</b></div>').join('');
             box.style.display = 'block';
         }
 
@@ -1705,6 +1998,7 @@ class MissionWebDashboard:
             updateProximityBanner(f);
             if (currentView === 'global') updateScene('plot-global', f, false);
             else if (currentView === 'pov') updateScene('plot-pov', f, true);
+            else if (currentView === 'fp') { updateScene('plot-fp', f, false, true); updateFirstPersonHud(f); }
             else if (currentView === 'cockpit') updateCockpitView(f);
             else if (currentView === 'prox') updateProxView(f);
             else if (currentView === 'report') updateReportView(f);
@@ -1779,6 +2073,7 @@ class MissionWebDashboard:
             });
         }
         buildProximityMarks();
+        detectCollision();
 
         // ---------- controlos ----------
         // Obtemos: troca de painel (separador), marca o botão ativo e inicia o radar quando a vista é a 3ª Pessoa.
@@ -1786,7 +2081,7 @@ class MissionWebDashboard:
             currentView = view;
             document.querySelectorAll('.view-panel').forEach(p => p.classList.remove('active'));
             document.querySelectorAll('.nav-buttons button').forEach(b => {
-                if (b.id.startsWith('btn-global') || b.id.startsWith('btn-pov') || b.id.startsWith('btn-cockpit') || b.id.startsWith('btn-prox') || b.id.startsWith('btn-report'))
+                if (b.id.startsWith('btn-global') || b.id.startsWith('btn-pov') || b.id.startsWith('btn-cockpit') || b.id.startsWith('btn-prox') || b.id.startsWith('btn-report') || b.id.startsWith('btn-fp'))
                     b.classList.remove('active');
             });
             const p = document.getElementById('panel-' + view);
@@ -1803,9 +2098,10 @@ class MissionWebDashboard:
         function setRobot(robotId) {
             currentRobot = robotId;
             if (!followOn) setFollow(true);      // ao escolher um robô, a câmara da Vista Global vai ter com ele e segue-o
-            document.getElementById('btn-r1').classList.toggle('active', robotId === 'Robot 1');
-            document.getElementById('btn-r4').classList.toggle('active', robotId === 'Robot 4');
-            document.getElementById('btn-r7').classList.toggle('active', robotId === 'Robot 7');
+            robotKeys.forEach((id, i) => {
+                const b = document.getElementById('btn-robot-' + i);
+                if (b) b.classList.toggle('active', id === robotId);
+            });
             const gd = document.getElementById('plot-global');
             if (gd && gd.data) {
                 robotKeys.forEach((id, i) => {
@@ -1864,8 +2160,18 @@ class MissionWebDashboard:
             let effectiveSpeed = speed;
             if (speed >= 500.0) effectiveSpeed = (t_max - t0_base) / 2.0;   // missão completa em ~2 segundos
 
+            const prevTime = currentTime;
             currentTime += dtSec * effectiveSpeed;
             if (currentTime > t_max) currentTime = t0_base;
+            if (collision !== null && prevTime < collision.t && currentTime >= collision.t) {
+                // o Play pára no instante da colisão; ao carregar em Play segue dali
+                currentTime = collision.t;
+                document.getElementById('time-slider').value = currentTime;
+                document.getElementById('time-display').innerText = fmtElapsed(currentTime - t0_base);
+                updateFrame(curF());
+                togglePlay();
+                return;
+            }
 
             document.getElementById('time-slider').value = currentTime;
             document.getElementById('time-display').innerText = fmtElapsed(currentTime - t0_base);
@@ -1880,12 +2186,11 @@ class MissionWebDashboard:
         // Atalhos de teclado
         window.addEventListener('keydown', (e) => {
             if (e.target && e.target.tagName === 'INPUT') return;
-            if (e.key === '1') setRobot('Robot 1');
-            if (e.key === '2') setRobot('Robot 4');
-            if (e.key === '3') setRobot('Robot 7');
+            if (e.key >= '1' && e.key <= '9' && robotKeys[parseInt(e.key) - 1]) setRobot(robotKeys[parseInt(e.key) - 1]);
             if (e.key.toLowerCase() === 'v') {
                 if (currentView === 'global') setView('pov');
-                else if (currentView === 'pov') setView('cockpit');
+                else if (currentView === 'pov') setView('fp');
+                else if (currentView === 'fp') setView('cockpit');
                 else if (currentView === 'cockpit') setView('prox');
                 else if (currentView === 'prox') setView('report');
                 else setView('global');
@@ -1896,6 +2201,8 @@ class MissionWebDashboard:
             if (e.key === '+' || e.key === '=') tpZoom(1.0 / 1.2);
             if (e.key === '-' || e.key === '_') tpZoom(1.2);
             if (e.key.toLowerCase() === 'p') togglePredict();
+            if (e.key.toLowerCase() === 'c') toggleFreeze();
+            if (e.key.toLowerCase() === 'h') toggleHud();
             if (e.key === ' ') { e.preventDefault(); togglePlay(); }
         });
 
@@ -1907,7 +2214,7 @@ class MissionWebDashboard:
             let rel = 0;
             if (params.has('t')) rel = parseFloat(params.get('t'));
             else if (hash && hash.startsWith('#t=')) rel = parseFloat(hash.substring(3));
-            if (params.has('robot')) setRobot(['Robot 1', 'Robot 4', 'Robot 7'][parseInt(params.get('robot')) - 1] || currentRobot);
+            if (params.has('robot')) setRobot(robotKeys[parseInt(params.get('robot')) - 1] || currentRobot);
             if (params.has('view')) setView(params.get('view'));
             if (params.has('speed')) setSpeed(parseFloat(params.get('speed')));
             currentTime = t0_base + rel;
@@ -1932,6 +2239,7 @@ class MissionWebDashboard:
 
         html = template.replace("__DIV_GLOBAL__", div_global) \
                        .replace("__DIV_POV__", div_pov) \
+                       .replace("__DIV_FP__", div_fp) \
                        .replace("__DIV_COCKPIT__", div_cockpit) \
                        .replace("__DIV_PROX__", div_prox) \
                        .replace("__DIV_REPORT__", div_report) \

@@ -238,6 +238,50 @@ def _mix_white(hex_color: str, f: float) -> str:
     return "#%02x%02x%02x" % tuple(int(round(v + (255 - v) * f)) for v in (r, g, b))
 
 
+# -----------------------------------------------------------------------------
+# Letras no casco: "INESC TEC" desenhado com traços (cada letra é uma linha poligonal)
+# -----------------------------------------------------------------------------
+SUB_TEXT = "INESC TEC"
+# Cada letra são traços numa caixa de largura 1 e altura 1 (u para a direita, v para cima)
+_GLYPHS = {
+    "I": [[(0.15, 1), (0.85, 1)], [(0.5, 1), (0.5, 0)], [(0.15, 0), (0.85, 0)]],
+    "N": [[(0, 0), (0, 1), (1, 0), (1, 1)]],
+    "E": [[(1, 1), (0, 1), (0, 0), (1, 0)], [(0, 0.5), (0.8, 0.5)]],
+    "S": [[(1, 1), (0, 1), (0, 0.5), (1, 0.5), (1, 0), (0, 0)]],
+    "C": [[(1, 1), (0, 1), (0, 0), (1, 0)]],
+    "T": [[(0, 1), (1, 1)], [(0.5, 1), (0.5, 0)]],
+}
+
+
+def build_submarine_lettering(text: str = SUB_TEXT, height_m: float = 0.5, width_m: float = 0.34,
+                              gap_m: float = 0.12, x_center_m: float = 0.5) -> dict:
+    """Pontos do texto no referencial do corpo (x proa, y estibordo, z quilha), em metros.
+
+    Método: cada letra são poucos traços numa caixa; a caixa põe-se ao longo do casco (x) e cada ponto é
+    empurrado para fora até à superfície do cilindro, y = raiz de (R2 - z2) mais uma folga de 2 cm.
+    O texto faz-se duas vezes: a estibordo (lê-se da proa para a popa a olhar de fora) e a bombordo, espelhado
+    em x, para também se ler bem desse lado. Os traços separam-se com None (o Plotly deixa um intervalo).
+    Obtemos: x, y, z prontos a rodar com a atitude do robô, tal como a malha do casco.
+    """
+    pitch = width_m + gap_m
+    total = len(text) * pitch - gap_m
+    x0 = x_center_m - total / 2.0
+    xs, ys, zs = [], [], []
+    for side in (1.0, -1.0):                       # 1 = estibordo, -1 = bombordo
+        for c, ch in enumerate(text):
+            for stroke in _GLYPHS.get(ch, []):
+                for (u, v) in stroke:
+                    x = x0 + c * pitch + u * width_m
+                    z = -(v - 0.5) * height_m       # z aponta para baixo; v aponta para cima
+                    r = _sub_radius(x)
+                    y = side * (float(np.sqrt(max(0.0, r * r - z * z))) + 0.02)
+                    if side < 0:
+                        x = 2.0 * x_center_m - x    # espelho em x no lado de bombordo
+                    xs.append(round(float(x), 3)); ys.append(round(y, 3)); zs.append(round(float(z), 3))
+                xs.append(None); ys.append(None); zs.append(None)
+    return {"x": xs, "y": ys, "z": zs}
+
+
 def create_global_3d_figure(
     dataset: MissionDataset,
     current_time: float,
@@ -258,6 +302,7 @@ def create_global_3d_figure(
       - 2 + 4*N + 3*i + a: Seta do eixo a (0 = x proa, 1 = y estibordo, 2 = z quilha) do robô i,
         colada ao robô e rodada com a sua atitude (roll, pitch, yaw)
       - 2 + 7*N + i: Previsão a 60 s do robô i (reta com a velocidade estimada; preenchida em JS)
+      - 2 + 8*N + i: Letras INESC TEC no casco do robô i (preenchidas em JS, rodam com o robô)
     (N = número de robôs. A ordem é usada pelo JavaScript do dashboard em web_server.py.)
     """
     fig = go.Figure()
@@ -380,6 +425,13 @@ def create_global_3d_figure(
         fig.add_trace(go.Scatter3d(
             x=[e0], y=[n0], z=[d0], mode="lines", name=f"{r_id} (Previsão 60 s)", showlegend=False,
             hoverinfo="skip", line=dict(color=traj.color, width=5, dash="dash")
+        ))
+
+    # Letras INESC TEC no casco (traces 2 + 8*N + i): começam vazias, o JavaScript preenche-as a cada instante
+    for r_id in sorted_robots:
+        fig.add_trace(go.Scatter3d(
+            x=[], y=[], z=[], mode="lines", name=f"{r_id} (INESC TEC)", showlegend=False,
+            hoverinfo="skip", line=dict(color="#f8fafc", width=4)
         ))
 
     # Layout Dark Mode com Profundidade Invertida (autoranging reversed em Z para maior profundidade = mais em baixo)

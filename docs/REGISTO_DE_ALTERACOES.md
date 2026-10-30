@@ -36,6 +36,7 @@ Como testar: `PYTHONPATH=. .venv/bin/python3 -m pytest multi_robot_system/tests 
 11. **Posição bruta contra suavizada.** O gráfico de distâncias tem botões «Suavizado (RTS)», «Bruto (CSV)» e «Ambos». Para isso `RobotTrajectory` guarda `pos_ned_raw`. Ficheiros: `trajectory.py`, `main.py`, `plotly_views.py`.
 12. **Previsão de 60 s.** Linha tracejada na cor de cada robot, com a posição que teria daqui a 60 s se mantivesse a velocidade estimada (termina à superfície se fosse sair da água). Botão «Previsão 60 s» ou tecla P. Vistas Global e 3ª Pessoa. Ficheiros: `plotly_views.py` (traços 2 + 7N + i) e `web_server.py`.
 13. **Painel de bordo de submarino (retirado na fusão).** Tinha sido feito um painel por cima da câmara de 1ª pessoa, mas os colegas substituíram essa vista pela Vista 3ª Pessoa (radar e mini-cockpit), que ficou. O código do painel foi retirado e o resto (separador 5, previsão, submarino 3D, atitude no Cockpit) mantém-se.
+13b. **Vista 1ª Pessoa reposta como separador 6.** Na fusão com o trabalho dos colegas a 1ª pessoa tinha sido retirada porque a Vista 3ª Pessoa deles ocupa o separador 2. Voltou como separador próprio, com o painel de bordo (fita de rumo, profundidade, arfagem, rolamento, velocidades e vizinho mais próximo). Ficheiro: `web_server.py` (`setFirstPersonCamera`, `updateFirstPersonHud`).
 14. **Limiares do gráfico e rodapé.** O gráfico de distâncias e o rodapé passaram a usar os limiares do `mission_config.yaml` em vez de 10 m e 30 m escritos no código.
 
 ## O que se descobriu nos dados (e não é um erro do programa)
