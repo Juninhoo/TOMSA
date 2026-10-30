@@ -1,6 +1,6 @@
-"""Testes Unitários de Rigor Matemático para Geodesia WGS-84, ECEF, NED e AER.
+"""Testes das conversões de coordenadas (WGS-84, ECEF, NED, AER).
 
-Validação cruzada com a biblioteca de referência da indústria pymap3d.
+Os resultados são comparados com a biblioteca de referência pymap3d.
 """
 
 import numpy as np
@@ -32,6 +32,7 @@ TEST_POINTS = [
 
 @pytest.mark.parametrize("lat,lon,h", TEST_POINTS)
 def test_geodetic_to_ecef_vs_pymap3d(lat, lon, h):
+    """Verifica a conversão geográfica -> ECEF contra a pymap3d."""
     X, Y, Z = geodetic_to_ecef(lat, lon, h)
     X_ref, Y_ref, Z_ref = pm.geodetic2ecef(lat, lon, h)
     assert abs(X - X_ref) < 1e-6
@@ -41,6 +42,7 @@ def test_geodetic_to_ecef_vs_pymap3d(lat, lon, h):
 
 @pytest.mark.parametrize("lat,lon,h", TEST_POINTS)
 def test_ecef_to_geodetic_roundtrip(lat, lon, h):
+    """Verifica que converter para ECEF e voltar devolve as coordenadas iniciais."""
     X, Y, Z = geodetic_to_ecef(lat, lon, h)
     lat_r, lon_r, h_r = ecef_to_geodetic(X, Y, Z)
     assert abs(lat_r - lat) < 1e-8
@@ -50,6 +52,7 @@ def test_ecef_to_geodetic_roundtrip(lat, lon, h):
 
 @pytest.mark.parametrize("lat,lon,h", TEST_POINTS)
 def test_geodetic_to_ned_vs_pymap3d(lat, lon, h):
+    """Verifica a conversão geográfica -> NED contra a pymap3d."""
     N, E, D = geodetic_to_ned(lat, lon, h, LAT0, LON0, H0)
     N_ref, E_ref, D_ref = pm.geodetic2ned(lat, lon, h, LAT0, LON0, H0)
     assert abs(N - N_ref) < 1e-5
@@ -58,6 +61,7 @@ def test_geodetic_to_ned_vs_pymap3d(lat, lon, h):
 
 
 def test_origin_is_zero():
+    """Verifica que a origem fica no ponto (0, 0, 0) em NED."""
     N, E, D = geodetic_to_ned(LAT0, LON0, H0, LAT0, LON0, H0)
     assert abs(N) < 1e-10
     assert abs(E) < 1e-10
@@ -65,13 +69,12 @@ def test_origin_is_zero():
 
 
 def test_cardinal_directions():
-    # 100m a Norte
+    """Verifica que pontos a 100 m a Norte e a Este caem no eixo certo, com o azimute certo."""
     az, el, rng = ned_to_aer(100.0, 0.0, 0.0)
     assert abs(az - 0.0) < 1e-8
     assert abs(el - 0.0) < 1e-8
     assert abs(rng - 100.0) < 1e-8
 
-    # 100m a Este
     az, el, rng = ned_to_aer(0.0, 100.0, 0.0)
     assert abs(az - 90.0) < 1e-8
     assert abs(el - 0.0) < 1e-8
