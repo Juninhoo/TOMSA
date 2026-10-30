@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
-"""Script de Teste e Demonstração do Visualizador 3D em 1ª Pessoa (Plotly).
+"""Atalho para abrir o visualizador 3D (Plotly) do ponto de vista de cada robô.
 
-Executa o visualizador 3D imersivo centrado no referencial próprio (Body Frame) de cada robô:
-- Teclas '1', '2', '3' para comutar instantaneamente a perspetiva de observação
-- Slider temporal de Replay
-- Exporta e abre 'output/mission_body_view_3d.html'
+Teclas 1, 2, 3 para mudar de robô; gera e abre output/mission_body_view_3d.html.
 """
 
 import sys
 from pathlib import Path
 
-# Garantir que a raiz do projeto está no sys.path
+# Permite executar o script a partir de qualquer pasta
 BASE_DIR = Path(__file__).resolve().parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
