@@ -1,7 +1,4 @@
-"""Exportador de Trajetórias Multi-Robô para Formato KML 3D com Marcas Temporais (gx:Track).
-
-Compatível com Google Earth Desktop e Google Earth Web, permitindo replay 3D da missão.
-"""
+"""Exportação das trajetórias para KML 3D (Google Earth), com tempo para reproduzir a missão."""
 
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,7 +9,7 @@ from multi_robot_system.core.math.geodesy import ned_to_ecef, ecef_to_geodetic
 
 
 def hex_to_kml_color(hex_color: str, alpha: str = "ff") -> str:
-    """Converte cor hexadecimal (#RRGGBB) para o formato KML (aabbggrr)."""
+    """Converte uma cor #RRGGBB para o formato de cor do KML (aabbggrr)."""
     clean = hex_color.lstrip("#")
     if len(clean) != 6:
         return f"{alpha}ffffff"
@@ -27,7 +24,7 @@ def export_mission_to_kml(
     output_path: str,
     subsample_step: int = 8
 ) -> str:
-    """Gera um ficheiro KML 3D completo com gx:Track temporal para cada robô."""
+    """Esta função gera o ficheiro KML com um percurso temporal (gx:Track) por robô."""
     lat0, lon0, h0 = dataset.origin
 
     kml_header = """<?xml version="1.0" encoding="UTF-8"?>
@@ -43,6 +40,7 @@ def export_mission_to_kml(
     styles = []
     placemarks = []
 
+    # Para cada robô: um estilo de cor e o percurso com tempo e posição (NED convertido para lon/lat/alt)
     for r_id, traj in dataset.trajectories.items():
         clean_id = r_id.replace(" ", "_").lower()
         kml_col = hex_to_kml_color(traj.color, alpha="e6")

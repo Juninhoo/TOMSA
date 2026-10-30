@@ -1,7 +1,6 @@
-"""Exportador de Trajetórias Multi-Robô para o Formato GeoJSON (Compatível com QGIS e SIG).
+"""Exportação das trajetórias para GeoJSON (para abrir no QGIS ou noutros SIG).
 
-Gera um ficheiro GeoJSON formal com suporte para geometrias LineString (trajetórias)
-e Point (marcos de início, fim e pontos críticos de aproximação CPA < 10m).
+Cada robô dá uma linha (a trajetória) e pontos de início e fim.
 """
 
 import json
@@ -18,11 +17,14 @@ def export_mission_to_geojson(
     output_path: str,
     subsample_step: int = 10
 ) -> str:
-    """Exporta todas as trajetórias e eventos de missão para GeoJSON estruturado."""
+    """Esta função exporta as trajetórias de todos os robôs para um ficheiro GeoJSON.
+
+    As posições NED são convertidas de volta para longitude, latitude e altitude.
+    """
     lat0, lon0, h0 = dataset.origin
     features = []
 
-    # 1. Trajetórias contínuas como LineString
+    # Trajetória de cada robô (uma linha) com estatísticas, seguida dos pontos de início e fim
     for r_id, traj in dataset.trajectories.items():
         coords_wgs84 = []
         N_pts = len(traj.timestamps)
@@ -38,7 +40,6 @@ def export_mission_to_geojson(
             X, Y, Z = ned_to_ecef(N, E, D, lat0, lon0, h0)
             lat, lon, h = ecef_to_geodetic(X, Y, Z)
 
-            # No padrão GeoJSON: [longitude, latitude, elevação/altura]
             coords_wgs84.append([float(lon), float(lat), float(h)])
 
         feature_line = {
@@ -60,7 +61,6 @@ def export_mission_to_geojson(
         }
         features.append(feature_line)
 
-        # 2. Ponto de Início
         p0_N, p0_E, p0_D = traj.pos_ned[:, 0]
         X0, Y0, Z0 = ned_to_ecef(p0_N, p0_E, p0_D, lat0, lon0, h0)
         lat_start, lon_start, h_start = ecef_to_geodetic(X0, Y0, Z0)

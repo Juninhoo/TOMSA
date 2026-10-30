@@ -1,9 +1,7 @@
-"""Execução de Benchmark e Exportação dos Resultados Comparativos de Interpoladores.
+"""Exportação dos resultados da comparação de interpoladores.
 
-Gera:
-1. Ficheiro CSV com métricas quantitativas de erro e tempo de computação.
-2. Tabela formatada em LaTeX para inclusão em relatórios académicos.
-3. Figura comparativa gráfica de alta resolução.
+Gera um CSV com os erros e tempos de cada método, uma tabela LaTeX para o relatório
+e uma figura de comparação.
 """
 
 from pathlib import Path
@@ -21,7 +19,7 @@ def run_full_interpolator_benchmark(
     output_csv_path: str = "output/interpolator_comparison.csv",
     output_fig_path: str = "docs/interpolator_comparison.png"
 ) -> pd.DataFrame:
-    """Executa a comparação dos interpoladores em todos os robôs da missão."""
+    """Esta função compara os interpoladores em todos os robôs e grava o CSV e a figura de resultados."""
     records = []
 
     for r_id, traj in dataset.trajectories.items():
@@ -41,7 +39,7 @@ def run_full_interpolator_benchmark(
     Path(output_csv_path).parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(output_csv_path, index=False)
 
-    # Gerar figura comparativa de alta resolução com matplotlib
+    # Figura: interpolação linear vs spline num excerto do Robot 1 (à esquerda) e RMSE médio de cada método (à direita)
     try:
         traj_sample = next(iter(dataset.trajectories.values()))
         t_sub = traj_sample.timestamps[:120]
@@ -49,11 +47,9 @@ def run_full_interpolator_benchmark(
 
         t_dense = np.linspace(t_sub[0], t_sub[-1], 300)
 
-        # Linear
         lin_e = np.interp(t_dense, t_sub, pos_sub[1])
         lin_n = np.interp(t_dense, t_sub, pos_sub[0])
 
-        # Spline
         from scipy.interpolate import CubicSpline
         cs_e = CubicSpline(t_sub, pos_sub[1], bc_type="natural")(t_dense)
         cs_n = CubicSpline(t_sub, pos_sub[0], bc_type="natural")(t_dense)
@@ -61,7 +57,6 @@ def run_full_interpolator_benchmark(
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5), dpi=300)
         fig.patch.set_facecolor("#f8f9fa")
 
-        # 2D Trajetória
         ax1.plot(pos_sub[1], pos_sub[0], "ko", markersize=3, label="Amostras Originais", alpha=0.6)
         ax1.plot(lin_e, lin_n, "b--", label="Linear (C0)", linewidth=1.5)
         ax1.plot(cs_e, cs_n, "r-", label="Spline Cúbica (C2)", linewidth=1.8)
@@ -71,7 +66,6 @@ def run_full_interpolator_benchmark(
         ax1.grid(True, linestyle=":", alpha=0.6)
         ax1.legend()
 
-        # Erros residuais por método
         methods = df["method"].unique()
         avg_rmse = [df[df["method"] == m]["rmse_m"].mean() for m in methods]
         bars = ax2.bar(methods, avg_rmse, color=["#457b9d", "#2a9d8f", "#e63946"], width=0.5)
@@ -93,7 +87,7 @@ def run_full_interpolator_benchmark(
 
 
 def generate_latex_table(df: pd.DataFrame) -> str:
-    """Gera o código LaTeX da tabela de erros agregada para o relatório."""
+    """Gera o código LaTeX da tabela de erros médios por método, para o relatório."""
     agg = df.groupby("method").agg({
         "continuity": "first",
         "rmse_m": "mean",
