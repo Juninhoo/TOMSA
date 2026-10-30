@@ -1,9 +1,7 @@
-"""Motor de Renderização Tridimensional em Plotly para Vistas Global 3D, POV de Câmara e Linhas Temporais.
+"""Construção das figuras Plotly do dashboard.
 
-Implementa:
-1. Vista Global 3D com batimetria (seabed), plano da água (superfície) e rasto progressivo por robô.
-2. Vista em 1ª Pessoa (POV) com câmara orientada pelo submarino ativo e mira tática sobre os outros veículos no FOV.
-3. Gráfico 2D da evolução temporal das distâncias relativas com limiar crítico de 10m.
+Cena 3D (fundo do mar, superfície, trajetórias e modelo 3D dos robôs), usada pela
+Vista Global e pela Vista 3ª Pessoa, e gráfico das distâncias entre robôs ao longo do tempo.
 """
 
 from typing import Dict, List, Optional, Tuple
@@ -16,16 +14,16 @@ from multi_robot_system.core.math.proximity import CPAResult
 from multi_robot_system.core.math.rotations import euler_zyx_to_rotation_matrix
 
 
-# -----------------------------------------------------------------------------
-# 1. Grelhas de Fundo do Mar e Superfície da Água
-# -----------------------------------------------------------------------------
+# -------------------------------------------------------------
+# 1. Superfície e fundo do mar
+# -------------------------------------------------------------
 def build_seabed_and_surface_traces(
     center_e: float,
     center_n: float,
     radius_m: float,
     seabed_depth_m: float
 ) -> Tuple[go.Scatter3d, go.Scatter3d]:
-    """Gera as grelhas wireframe da superfície da água (D=0) e do fundo do mar."""
+    """Desenha a grelha da superfície da água (profundidade 0) e a grelha do fundo do mar."""
     grid_res = 12
     e_vals = np.linspace(center_e - radius_m, center_e + radius_m, grid_res)
     n_vals = np.linspace(center_n - radius_m, center_n + radius_m, grid_res)
@@ -75,7 +73,7 @@ def compute_submarine_wireframe(
     yaw_deg: float, pitch_deg: float,
     length: float = 8.0, wingspan: float = 3.5, height: float = 2.5
 ) -> Tuple[List[float], List[float], List[float]]:
-    """Calcula a geometria tridimensional do casco do submarino (nariz, cauda, aletas e leme dorsal)."""
+    """Calcula um contorno simples (em linhas) do submarino: nariz, cauda, asas e leme."""
     yaw = np.radians(yaw_deg)
     pitch = np.radians(pitch_deg)
 
@@ -101,8 +99,7 @@ def compute_submarine_wireframe(
     return pts[:, 0].tolist(), pts[:, 1].tolist(), pts[:, 2].tolist()
 
 
-# Eixos do referencial do corpo (Body Frame): x = proa (frente), y = estibordo (direita), z = quilha (baixo).
-# Convenção de cores habitual em robótica: x vermelho, y verde, z azul.
+# Eixos do robô: x frente (vermelho), y direita (verde), z baixo (azul)
 BODY_AXIS_NAMES = ("x", "y", "z")
 BODY_AXIS_COLORS = ("#ff3b3b", "#2ee66b", "#3b8bff")
 BODY_AXIS_LENGTH_M = 10.0
@@ -113,15 +110,13 @@ def compute_body_axes(
     roll_deg: float, pitch_deg: float, yaw_deg: float,
     length: float = BODY_AXIS_LENGTH_M
 ) -> List[Tuple[List[float], List[float], List[float]]]:
-    """Calcula as 3 setas (x, y, z) do referencial do corpo, coladas ao robô e rodadas com a sua atitude.
+    """Esta função calcula as 3 setas dos eixos do robô (x frente, y direita, z baixo).
 
-    Cada coluna da matriz de rotação R = Rz(yaw) Ry(pitch) Rx(roll) é um eixo do corpo escrito no
-    referencial NED. Devolve, para cada eixo, as listas (E, N, D) do ponto de origem (centro do robô)
-    e do ponto da ponta da seta, prontas para o Scatter3d (x = Este, y = Norte, z = Profundidade).
+    As setas partem do centro do robô e rodam com a sua orientação (roll, pitch, yaw).
     """
     r, p, y = np.radians(roll_deg), np.radians(pitch_deg), np.radians(yaw_deg)
     R = euler_zyx_to_rotation_matrix(r, p, y)
-    origin = np.array([n, e, d])  # ordem NED
+    origin = np.array([n, e, d])
     axes = []
     for k in range(3):
         tip = origin + length * R[:, k]
@@ -130,9 +125,9 @@ def compute_body_axes(
 
 
 def get_scene_geometry(dataset: MissionDataset, seabed_margin_m: float = 5.0, top_margin_m: float = 3.0) -> dict:
-    """Caixa 3D partilhada pela Vista Global e pela Vista POV (eixos fixos, escala métrica 1:1).
+    """Calcula a caixa 3D da cena (centro, tamanho, fundo e superfície), comum às duas vistas 3D.
 
-    O JS usa estes valores para converter metros -> coordenadas normalizadas da câmara do Plotly.
+    O JavaScript usa estes valores para posicionar a câmara.
     """
     all_n = np.concatenate([t.pos_ned[0] for t in dataset.trajectories.values()])
     all_e = np.concatenate([t.pos_ned[1] for t in dataset.trajectories.values()])
@@ -148,19 +143,17 @@ def get_scene_geometry(dataset: MissionDataset, seabed_margin_m: float = 5.0, to
     }
 
 
-# -----------------------------------------------------------------------------
-# 2. Vista Global 3D (Com rasto progressivo)
-# -----------------------------------------------------------------------------
-# -----------------------------------------------------------------------------
-# Modelo 3D do submarino (casco de torpedo com 4 aletas na cauda), partilhado entre Python e JavaScript
-# -----------------------------------------------------------------------------
-SUB_HALF_LENGTH_M = 5.0     # o casco vai de -5 m (cauda) a +5 m (proa) em torno da posição do robot
+# -------------------------------------------------------------
+# 2. Modelo 3D do submarino e cena 3D
+# -------------------------------------------------------------
+# Dimensões do submarino: 10 m de comprimento, 1,15 m de raio
+SUB_HALF_LENGTH_M = 5.0
 SUB_RADIUS_M = 1.15
 _SUB_MESH_CACHE = {}
 
 
 def _sub_radius(x: float) -> float:
-    """Perfil do casco: nariz elíptico, corpo cilíndrico, cauda a afinar."""
+    """Raio do casco ao longo do comprimento: nariz arredondado, corpo cilíndrico e cauda mais fina."""
     R = SUB_RADIUS_M
     if x > 3.0:
         return R * float(np.sqrt(max(0.0, 1.0 - ((x - 3.0) / 2.0) ** 2)))
@@ -170,36 +163,37 @@ def _sub_radius(x: float) -> float:
 
 
 def build_submarine_mesh(n_phi: int = 14) -> dict:
-    """Malha do submarino no referencial do corpo (x proa, y estibordo, z quilha), em metros.
+    """Esta função constrói o modelo 3D do submarino (triângulos) nas coordenadas do robô.
 
-    Devolve listas x, y, z (vértices) e i, j, k (triângulos). As aletas têm vértices duplicados com a
-    ordem invertida, para se verem iluminadas dos dois lados.
+    Casco em forma de torpedo e 4 aletas na cauda. O resultado é guardado para não ser recalculado.
     """
     if n_phi in _SUB_MESH_CACHE:
         return _SUB_MESH_CACHE[n_phi]
     L = SUB_HALF_LENGTH_M
     stations = np.unique(np.concatenate([np.linspace(-L, -2.0, 8), np.linspace(-2.0, 3.0, 6), np.linspace(3.0, L, 9)]))[1:-1]
-    verts = [(-L, 0.0, 0.0)]                                   # ponta da cauda
+    # Vértices: ponta da cauda, anéis ao longo do casco e ponta da proa
+    verts = [(-L, 0.0, 0.0)]
     for x in stations:
         r = _sub_radius(float(x))
         for q in range(n_phi):
             a = 2.0 * np.pi * q / n_phi
             verts.append((float(x), r * float(np.cos(a)), r * float(np.sin(a))))
-    verts.append((L, 0.0, 0.0))                                # ponta da proa
+    verts.append((L, 0.0, 0.0))
+    # Triângulos: cauda, corpo e proa
     tris = []
     ns = len(stations)
     ring = lambda s, q: 1 + s * n_phi + (q % n_phi)
-    for q in range(n_phi):                                     # leque da cauda
+    for q in range(n_phi):
         tris.append((0, ring(0, q + 1), ring(0, q)))
-    for s in range(ns - 1):                                    # corpo
+    for s in range(ns - 1):
         for q in range(n_phi):
             a, b, c, d = ring(s, q), ring(s, q + 1), ring(s + 1, q + 1), ring(s + 1, q)
             tris.append((a, b, c))
             tris.append((a, c, d))
     last = len(verts) - 1
-    for q in range(n_phi):                                     # leque da proa
+    for q in range(n_phi):
         tris.append((last, ring(ns - 1, q), ring(ns - 1, q + 1)))
-    # Aletas em cruz na cauda: dorsal, ventral, bombordo, estibordo
+    # Quatro aletas em cruz na cauda (duplicadas para se verem dos dois lados)
     for (uy, uz) in ((0.0, -1.0), (0.0, 1.0), (-1.0, 0.0), (1.0, 0.0)):
         quad = [(-3.2, _sub_radius(-3.2)), (-4.9, _sub_radius(-4.9)), (-4.8, _sub_radius(-4.8) + 1.7), (-4.0, _sub_radius(-4.0) + 1.7)]
         base = len(verts)
@@ -218,31 +212,31 @@ def build_submarine_mesh(n_phi: int = 14) -> dict:
 
 
 def orient_submarine_mesh(mesh: dict, e: float, n: float, d: float, roll_deg: float, pitch_deg: float, yaw_deg: float, scale: float = 1.0):
-    """Roda a malha com a atitude (roll, pitch, yaw) e põe-na na posição (Este, Norte, Profundidade). Devolve x, y, z do Plotly."""
+    """Roda o modelo 3D com a orientação do robô e coloca-o na sua posição (Este, Norte, Profundidade)."""
     ph, th, ps = np.radians([roll_deg, pitch_deg, yaw_deg])
     cph, sph, cth, sth, cps, sps = np.cos(ph), np.sin(ph), np.cos(th), np.sin(th), np.cos(ps), np.sin(ps)
     R = np.array([
         [cth * cps, sph * sth * cps - cph * sps, cph * sth * cps + sph * sps],
         [cth * sps, sph * sth * sps + cph * cps, cph * sth * sps - sph * cps],
         [-sth,      sph * cth,                   cph * cth],
-    ])   # corpo para NED (Rz yaw, Ry pitch, Rx roll): as colunas são os eixos x, y, z do corpo
+    ])
     body = np.vstack([mesh["x"], mesh["y"], mesh["z"]]) * scale
     ned = R @ body + np.array([[n], [e], [d]])
     return ned[1].tolist(), ned[0].tolist(), ned[2].tolist()
 
 
 def _mix_white(hex_color: str, f: float) -> str:
-    """Clareia uma cor #rrggbb misturando com branco (f de 0 a 1)."""
+    """Clareia uma cor misturando-a com branco (f entre 0 e 1)."""
     c = hex_color.lstrip("#")
     r, g, b = (int(c[k:k + 2], 16) for k in (0, 2, 4))
     return "#%02x%02x%02x" % tuple(int(round(v + (255 - v) * f)) for v in (r, g, b))
 
 
-# -----------------------------------------------------------------------------
-# Letras no casco: "INESC TEC" desenhado com traços (cada letra é uma linha poligonal)
-# -----------------------------------------------------------------------------
+# -------------------------------------------------------------
+# Texto 'INESC TEC' no casco do submarino
+# -------------------------------------------------------------
+# Cada letra é uma lista de traços numa caixa de 1 x 1 (u para a direita, v para cima)
 SUB_TEXT = "INESC TEC"
-# Cada letra são traços numa caixa de largura 1 e altura 1 (u para a direita, v para cima)
 _GLYPHS = {
     "I": [[(0.15, 1), (0.85, 1)], [(0.5, 1), (0.5, 0)], [(0.15, 0), (0.85, 0)]],
     "N": [[(0, 0), (0, 1), (1, 0), (1, 1)]],
@@ -255,28 +249,26 @@ _GLYPHS = {
 
 def build_submarine_lettering(text: str = SUB_TEXT, height_m: float = 0.5, width_m: float = 0.34,
                               gap_m: float = 0.12, x_center_m: float = 0.5) -> dict:
-    """Pontos do texto no referencial do corpo (x proa, y estibordo, z quilha), em metros.
+    """Esta função calcula os traços do texto 'INESC TEC' colado ao casco, nas coordenadas do robô.
 
-    Método: cada letra são poucos traços numa caixa; a caixa põe-se ao longo do casco (x) e cada ponto é
-    empurrado para fora até à superfície do cilindro, y = raiz de (R2 - z2) mais uma folga de 2 cm.
-    O texto faz-se duas vezes: a estibordo (lê-se da proa para a popa a olhar de fora) e a bombordo, espelhado
-    em x, para também se ler bem desse lado. Os traços separam-se com None (o Plotly deixa um intervalo).
-    Obtemos: x, y, z prontos a rodar com a atitude do robô, tal como a malha do casco.
+    Cada letra é feita de poucos traços, encostados à superfície do casco. O texto aparece
+    nos dois lados (espelhado a bombordo para se ler bem). Os traços são separados por None.
     """
     pitch = width_m + gap_m
     total = len(text) * pitch - gap_m
     x0 = x_center_m - total / 2.0
     xs, ys, zs = [], [], []
-    for side in (1.0, -1.0):                       # 1 = estibordo, -1 = bombordo
+    # Para cada lado (estibordo, depois bombordo espelhado), cada letra e cada traço
+    for side in (1.0, -1.0):
         for c, ch in enumerate(text):
             for stroke in _GLYPHS.get(ch, []):
                 for (u, v) in stroke:
                     x = x0 + c * pitch + u * width_m
-                    z = -(v - 0.5) * height_m       # z aponta para baixo; v aponta para cima
+                    z = -(v - 0.5) * height_m
                     r = _sub_radius(x)
                     y = side * (float(np.sqrt(max(0.0, r * r - z * z))) + 0.02)
                     if side < 0:
-                        x = 2.0 * x_center_m - x    # espelho em x no lado de bombordo
+                        x = 2.0 * x_center_m - x
                     xs.append(round(float(x), 3)); ys.append(round(y, 3)); zs.append(round(float(z), 3))
                 xs.append(None); ys.append(None); zs.append(None)
     return {"x": xs, "y": ys, "z": zs}
@@ -288,42 +280,32 @@ def create_global_3d_figure(
     selected_robot_id: str,
     seabed_margin_m: float = 5.0
 ) -> go.Figure:
-    """Constrói a cena 3D panorâmica da missão no instante current_time.
+    """Esta função constrói a cena 3D da missão no instante current_time.
 
-    O rasto da trajetória desenha-se progressivamente (sem rasto no início, revelando-se com o avanço temporal).
-    Traces:
-      - 0: Superfície
-      - 1: Fundo do mar
-      - Para cada robô i (ordenado):
-          2 + 3*i: Linha de Rasto (Progressivo)
-          3 + 3*i: Marcador de Posição
-          4 + 3*i: Casco 3D do Submarino (Modelo Tridimensional Completo)
-      - 2 + 3*N + i: Rota completa de cada robô (fantasma ténue)
-      - 2 + 4*N + 3*i + a: Seta do eixo a (0 = x proa, 1 = y estibordo, 2 = z quilha) do robô i,
-        colada ao robô e rodada com a sua atitude (roll, pitch, yaw)
-      - 2 + 7*N + i: Previsão a 60 s do robô i (reta com a velocidade estimada; preenchida em JS)
-      - 2 + 8*N + i: Letras INESC TEC no casco do robô i (preenchidas em JS, rodam com o robô)
-    (N = número de robôs. A ordem é usada pelo JavaScript do dashboard em web_server.py.)
+    Desenha a superfície, o fundo, e para cada robô o rasto já percorrido, a posição, o modelo 3D,
+    a rota completa (ténue), os eixos x, y, z, a previsão a 60 s e o texto INESC TEC.
+    Atenção: o JavaScript (web_server.py) atualiza os traços pela sua posição na lista, por isso a ordem não pode mudar:
+      0 superfície, 1 fundo,
+      2 + 3i rasto, 3 + 3i marcador, 4 + 3i modelo 3D do robô i,
+      2 + 3N + i rota completa, 2 + 4N + 3i + a eixo a do robô i, 2 + 7N + i previsão, 2 + 8N + i texto (N = número de robôs).
     """
     fig = go.Figure()
 
+    # Superfície e fundo do mar
     geo = get_scene_geometry(dataset, seabed_margin_m)
     center_n, center_e, max_range, seabed_d = geo["cN"], geo["cE"], geo["radius"], geo["d_bottom"]
 
-    # Superfície e Fundo (Traces 0 e 1)
     tr_surf, tr_sea = build_seabed_and_surface_traces(center_e, center_n, max_range, seabed_d)
     fig.add_trace(tr_surf)
     fig.add_trace(tr_sea)
 
-    # Estados dos robôs no instante atual
+    # Para cada robô: rasto até ao instante atual, marcador de posição e modelo 3D
     current_states = dataset.get_state_at_time(current_time)
 
-    # Trajetórias progressivas de cada robô em ordem estritamente determinística
     sorted_robots = sorted(dataset.trajectories.keys())
-    body_pose = {}  # posição e atitude de cada robô, para desenhar os eixos x, y, z no fim
+    body_pose = {}
     for r_id in sorted_robots:
         traj = dataset.trajectories[r_id]
-        # Filtra pontos até ao tempo atual (rasto progressivo conforme Q9)
         mask = traj.timestamps <= current_time
         pts_n = traj.pos_ned[0, mask].tolist()
         pts_e = traj.pos_ned[1, mask].tolist()
@@ -334,7 +316,6 @@ def create_global_3d_figure(
             pts_e = [float(traj.pos_ned[1, 0])]
             pts_d = [float(traj.pos_ned[2, 0])]
 
-        # Trace 2 + 3*i: Rasto progressivo
         fig.add_trace(go.Scatter3d(
             x=pts_e, y=pts_n, z=pts_d,
             mode="lines",
@@ -343,7 +324,6 @@ def create_global_3d_figure(
             hovertemplate=f"<b>{r_id}</b><br>Este: %{{x:.1f}} m<br>Norte: %{{y:.1f}} m<br>Profundidade: %{{z:.1f}} m<extra></extra>"
         ))
 
-        # Obter estado no tempo atual
         if r_id in current_states:
             st = current_states[r_id]
             curr_n, curr_e, curr_d = float(st["pos_ned"][0]), float(st["pos_ned"][1]), float(st["pos_ned"][2])
@@ -365,7 +345,6 @@ def create_global_3d_figure(
         is_sel = (r_id == selected_robot_id)
         marker_size = 8 if is_sel else 6
 
-        # Trace 3 + 3*i: Marcador de posição do veículo
         fig.add_trace(go.Scatter3d(
             x=[curr_e], y=[curr_n], z=[curr_d - 2.2],
             mode="markers+text",
@@ -377,7 +356,6 @@ def create_global_3d_figure(
             hovertemplate=f"<b>{lbl}</b><br>N: {curr_n:.1f} m | E: {curr_e:.1f} m<br>Prof: {curr_d:.1f} m | Proa: {yaw_deg:.1f}°<extra></extra>"
         ))
 
-        # Trace 4 + 3*i: Modelo 3D do Submarino (Casco, asas e leme orientados em 3D)
         mesh = build_submarine_mesh()
         sub_x, sub_y, sub_z = orient_submarine_mesh(mesh, curr_e, curr_n, curr_d, roll_deg, pitch_deg, yaw_deg)
         fig.add_trace(go.Mesh3d(
@@ -391,7 +369,7 @@ def create_global_3d_figure(
             lightposition=dict(x=0, y=-2000, z=3000)
         ))
 
-    # Rota completa de cada robô (fantasma ténue) - traces 2 + 3*N + i. O rasto brilhante revela-se por cima.
+    # Rota completa de cada robô (linha ténue)
     for r_id in sorted_robots:
         traj = dataset.trajectories[r_id]
         step = max(1, traj.pos_ned.shape[1] // 1500)
@@ -401,8 +379,7 @@ def create_global_3d_figure(
             opacity=0.22, line=dict(color=traj.color, width=2)
         ))
 
-    # Eixos x, y, z do corpo de cada robô (traces 2 + 4*N + 3*i + a): a origem fica no centro do robô e as
-    # setas rodam com ele. A letra do eixo aparece na ponta da seta.
+    # Eixos x, y, z de cada robô
     for r_id in sorted_robots:
         e0, n0, d0, roll0, pitch0, yaw0 = body_pose[r_id]
         for a, (ax_x, ax_y, ax_z) in enumerate(compute_body_axes(e0, n0, d0, roll0, pitch0, yaw0)):
@@ -418,7 +395,7 @@ def create_global_3d_figure(
                 line=dict(color=BODY_AXIS_COLORS[a], width=7)
             ))
 
-    # Previsão a 60 s (traces 2 + 7*N + i): começa vazia, o JavaScript preenche-a a cada instante
+    # Previsão a 60 s (vazia aqui, preenchida pelo JavaScript)
     for r_id in sorted_robots:
         traj = dataset.trajectories[r_id]
         e0, n0, d0 = body_pose[r_id][0], body_pose[r_id][1], body_pose[r_id][2]
@@ -427,14 +404,14 @@ def create_global_3d_figure(
             hoverinfo="skip", line=dict(color=traj.color, width=5, dash="dash")
         ))
 
-    # Letras INESC TEC no casco (traces 2 + 8*N + i): começam vazias, o JavaScript preenche-as a cada instante
+    # Texto INESC TEC de cada robô (vazio aqui, preenchido pelo JavaScript)
     for r_id in sorted_robots:
         fig.add_trace(go.Scatter3d(
             x=[], y=[], z=[], mode="lines", name=f"{r_id} (INESC TEC)", showlegend=False,
             hoverinfo="skip", line=dict(color="#f8fafc", width=4)
         ))
 
-    # Layout Dark Mode com Profundidade Invertida (autoranging reversed em Z para maior profundidade = mais em baixo)
+    # Estilo escuro, com a profundidade a aumentar para baixo
     fig.update_layout(
         template="plotly_dark",
         paper_bgcolor="#0b0f19",
@@ -442,7 +419,6 @@ def create_global_3d_figure(
         scene=dict(
             xaxis=dict(title="Este (m)", range=[center_e - max_range, center_e + max_range], backgroundcolor="#111827", gridcolor="#374151"),
             yaxis=dict(title="Norte (m)", range=[center_n - max_range, center_n + max_range], backgroundcolor="#111827", gridcolor="#374151"),
-            # intervalo [fundo, superfície]: maior profundidade em baixo
             zaxis=dict(title="Profundidade (m)", range=[geo["d_bottom"], geo["d_top"]], backgroundcolor="#111827", gridcolor="#374151"),
             aspectmode="manual", aspectratio=dict(x=1, y=1, z=geo["ratio_z"])
         ),
@@ -453,7 +429,7 @@ def create_global_3d_figure(
 
 
 # -------------------------------------------------------------
-# 3. Vista em 3ª Pessoa - a mesma cena 3D, com a câmara atrás e acima do robô ativo
+# 3. Vista 3ª Pessoa
 # -------------------------------------------------------------
 def create_pov_camera_figure(
     dataset: MissionDataset,
@@ -461,11 +437,9 @@ def create_pov_camera_figure(
     active_robot_id: str,
     fov_deg: float = 70.0
 ) -> go.Figure:
-    """Cena 3D idêntica à Vista Global (mesmos traces e ordem), usada na Vista 3ª Pessoa.
+    """Cria a cena da Vista 3ª Pessoa: a mesma cena da Vista Global, sem legenda.
 
-    A câmara (eye/center) é posicionada em JS a cada frame atrás e acima do robô ativo, a olhar para a proa
-    (rumo alisado). Por cima da cena, o dashboard desenha um radar (canto superior esquerdo) e um painel de
-    estatísticas do robô ativo (canto inferior esquerdo). O nome da função mantém-se por compatibilidade.
+    A câmara que segue o robô, o radar e os instrumentos são geridos pelo JavaScript.
     """
     fig = create_global_3d_figure(dataset, current_time, active_robot_id)
     fig.update_layout(showlegend=False, margin=dict(l=0, r=0, t=0, b=0))
@@ -473,19 +447,19 @@ def create_pov_camera_figure(
 
 
 # -------------------------------------------------------------
-# 4. Gráfico Temporal 2D de Proximidade (com limiar 10m)
+# 4. Gráfico das distâncias entre robôs
 # -------------------------------------------------------------
-PROX_PAIR_COLORS = ["#9085e9", "#d55181", "#e0a030"]   # uma cor por par de robots (distinguíveis em fundo escuro)
+PROX_PAIR_COLORS = ["#9085e9", "#d55181", "#e0a030"]
 
 
 def _fmt_mission_time(sec: float) -> str:
-    """Segundos como minutos e segundos (62m 9.0s), igual ao relógio do navegador."""
+    """Escreve um tempo em segundos no formato '62m 9.0s', como o relógio do dashboard."""
     m = int(sec // 60)
     return f"{m}m {sec - 60 * m:.1f}s"
 
 
 def _add_hline(fig: go.Figure, y: float, color: str, text: str, below: bool) -> None:
-    """Linha horizontal tracejada com rótulo no canto direito (escrita à mão: add_hline não funciona antes de haver traços)."""
+    """Desenha uma linha horizontal tracejada com um texto à direita."""
     fig.add_shape(type="line", xref="x domain", yref="y", x0=0, x1=1, y0=y, y1=y,
                   line=dict(color=color, dash="dash", width=1.5))
     fig.add_annotation(xref="x domain", yref="y", x=1, y=y, text=text, showarrow=False, xanchor="right",
@@ -493,7 +467,7 @@ def _add_hline(fig: go.Figure, y: float, color: str, text: str, below: bool) -> 
 
 
 def _add_band(fig: go.Figure, y0: float, y1: float, color: str, opacity: float) -> None:
-    """Faixa horizontal colorida (zona de perigo ou de aviso) atrás das curvas, escrita à mão como _add_hline."""
+    """Desenha uma faixa horizontal colorida (zona de perigo ou de aviso) atrás das curvas."""
     fig.add_shape(type="rect", xref="x domain", yref="y", x0=0, x1=1, y0=y0, y1=y1,
                   fillcolor=color, opacity=opacity, line_width=0, layer="below")
 
@@ -505,13 +479,11 @@ def create_proximity_timeline_figure(
     dt_step_s: float = 2.0,
     warning_threshold_m: float = 30.0
 ) -> go.Figure:
-    """Gráfico 2D da evolução temporal das distâncias relativas entre robôs.
+    """Esta função cria o gráfico da distância entre cada par de robôs ao longo da missão.
 
-    - Uma cor por par, com o nome escrito no fim de cada linha e o mínimo de cada par assinalado.
-    - Faixas de aviso (abaixo de warning_threshold_m) e de perigo (abaixo de collision_threshold_m).
-    - Por baixo, uma barra por robô a mostrar quando tem dados (fora dela o par não existe, não é um erro).
-    - Botões para mudar a escala vertical: 0 a 400 m, ampliação 0 a 60 m e logarítmica.
-    IMPORTANTE: a ordem das formas (shapes) é usada pelo JavaScript: shapes[1] é o cursor do tempo atual.
+    Inclui as zonas de perigo e de aviso, o mínimo de cada par, uma barra por robô a indicar quando
+    tem dados e botões para mudar a escala e comparar dados suavizados com dados brutos.
+    Atenção: o JavaScript usa a forma shapes[1] como cursor do tempo atual (não mudar a ordem).
     """
     start_t = dataset.t0_mission
     end_t = dataset.t_end_mission
@@ -521,9 +493,9 @@ def create_proximity_timeline_figure(
     pairs = [(r_ids[i], r_ids[j]) for i in range(len(r_ids)) for j in range(i + 1, len(r_ids))]
     t_rel_list = times - dataset.t0_mission
 
-    # Posições interpoladas (NaN fora da janela de operação de cada robô)
+    # Posições de cada robô na grelha de tempo (vazias fora do seu período de dados), suavizadas e brutas
     pos = {}
-    pos_raw = {}   # posições brutas (sem RTS), se existirem
+    pos_raw = {}
     for r_id, traj in dataset.trajectories.items():
         p = np.vstack([np.interp(times, traj.timestamps, traj.pos_ned[k]) for k in range(3)])
         p[:, (times < traj.timestamps[0]) | (times > traj.timestamps[-1])] = np.nan
@@ -535,19 +507,18 @@ def create_proximity_timeline_figure(
 
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.82, 0.18], vertical_spacing=0.06)
 
-    # Limiar crítico (forma 0) e cursor do tempo atual (forma 1): esta ordem não pode mudar
+    # Limiar de perigo (forma 0), cursor do tempo (forma 1), faixas de perigo e aviso
     _add_hline(fig, collision_threshold_m, "#e63946", f"CRÍTICO (< {collision_threshold_m:g} m)", below=True)
     curr_t_rel = current_time - dataset.t0_mission
     fig.add_shape(type="line", xref="x", yref="paper", x0=curr_t_rel, x1=curr_t_rel, y0=0, y1=1,
                   line=dict(color="#00b4d8", width=2))
 
-    # Faixas de perigo e de aviso e linha dos 30 m
     _add_band(fig, 0.01, collision_threshold_m, "#e63946", 0.16)
     _add_band(fig, collision_threshold_m, warning_threshold_m, "#f4a261", 0.12)
     _add_hline(fig, warning_threshold_m, "#f4a261", f"AVISO (< {warning_threshold_m:g} m)", below=False)
 
-    # Uma curva por par, com rótulo direto no fim e o mínimo assinalado
-    smooth_idx, marker_idx, raw_idx = [], [], []   # índices dos traços, para o botão suavizado / bruto
+    # Uma curva por par de robôs (suavizada e bruta), com o mínimo assinalado e o nome no fim
+    smooth_idx, marker_idx, raw_idx = [], [], []
     for idx, (p1, p2) in enumerate(pairs):
         dist = np.linalg.norm(pos[p1] - pos[p2], axis=0)
         color = PROX_PAIR_COLORS[idx % len(PROX_PAIR_COLORS)]
@@ -580,7 +551,7 @@ def create_proximity_timeline_figure(
         fig.add_annotation(x=t_rel_list[i_end], y=dist[i_end], text="<b>" + short + "</b>", showarrow=False,
                            xanchor="left", xshift=6, font=dict(color="#e0e1dd", size=12), row=1, col=1)
 
-    # Barras de presença: quando cada robô tem dados
+    # Barras por baixo: período em que cada robô tem dados
     n = len(r_ids)
     for k, r_id in enumerate(r_ids):
         traj = dataset.trajectories[r_id]
@@ -596,6 +567,7 @@ def create_proximity_timeline_figure(
     fig.update_yaxes(title_text="Distância de separação (m)", range=[0, 410], row=1, col=1)
     fig.update_xaxes(title_text="Tempo decorrido na missão (s)", row=2, col=1)
 
+    # Estilo e botões de escala (0-400 m, 0-60 m, logarítmica)
     fig.update_layout(
         template="plotly_dark",
         paper_bgcolor="#0b0f19",
@@ -613,11 +585,11 @@ def create_proximity_timeline_figure(
             ],
         )],
     )
+    # Botões para mostrar os dados suavizados, os brutos ou ambos
     if raw_idx:
         managed = smooth_idx + marker_idx + raw_idx
 
         def _vis(smooth, marker, raw):
-            # lista de visibilidade, por ordem: traços suavizados, marcadores, traços brutos (usada pelos 3 botões)
             return [smooth] * len(smooth_idx) + [marker] * len(marker_idx) + [raw] * len(raw_idx)
 
         menus = list(fig.layout.updatemenus)

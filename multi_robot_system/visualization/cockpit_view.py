@@ -1,13 +1,7 @@
-"""Módulo de Renderização do Cockpit / Sala de Controlo do Submarino (3ª Vista).
+"""Figura Plotly inicial da página Cockpit (versão antiga, desenhada no servidor).
 
-Gera o painel instrumental avançado de navegação e controlo tático para o operador,
-incluindo:
-1. Horizonte Artificial (Pitch & Roll).
-2. Bússola Giroscópica (Heading).
-3. Profundímetro e Distância ao Fundo.
-4. Velocímetro Longitudinal e Taxa de Viragem (Turn Rate).
-5. Radar Tático AER com posições relativas dos outros submarinos.
-6. Painel Anunciador de Risco de Colisão Crítico (< 10m) e Alertas CPA.
+Mostra a orientação, a profundidade, a velocidade, a rotação, um radar com os outros robôs
+e o alerta de proximidade. No dashboard atual, o Cockpit é desenhado no navegador (web_server.py).
 """
 
 from typing import Dict, List, Optional
@@ -24,7 +18,7 @@ def create_cockpit_figure(
     mission_time_s: float,
     max_depth_m: float = 35.0
 ) -> go.Figure:
-    """Cria o painel de instrumentos virtuais (Cockpit / Sala de Controlo) para o robô selecionado."""
+    """Esta função cria o painel de instrumentos (grelha 2x3 de mostradores) para o robô selecionado."""
     r_id = state["robot_id"]
     color = state["color"]
     roll_deg, pitch_deg, yaw_deg = state["euler_deg"]
@@ -32,7 +26,7 @@ def create_cockpit_figure(
     speed_mps = state["speed_longitudinal"]
     turn_rate = state["turn_rate_yaw"]
 
-    # Criação do layout em grelha com tema tático militar/industrial
+    # Grelha de 2 linhas x 3 colunas, uma célula por instrumento
     fig = make_subplots(
         rows=2, cols=3,
         specs=[
@@ -51,7 +45,7 @@ def create_cockpit_figure(
         horizontal_spacing=0.12
     )
 
-    # 1. Horizonte Artificial / Heading (Compass)
+    # Linha 1: rumo (bússola), profundidade e velocidade de avanço
     fig.add_trace(
         go.Indicator(
             mode="gauge+number",
@@ -73,7 +67,6 @@ def create_cockpit_figure(
         row=1, col=1
     )
 
-    # 2. Profundímetro Digital
     fig.add_trace(
         go.Indicator(
             mode="gauge+number",
@@ -94,7 +87,6 @@ def create_cockpit_figure(
         row=1, col=2
     )
 
-    # 3. Velocímetro Longitudinal
     fig.add_trace(
         go.Indicator(
             mode="gauge+number",
@@ -114,7 +106,7 @@ def create_cockpit_figure(
         row=1, col=3
     )
 
-    # 4. Radar Tático Polar AER (Robôs visíveis no horizonte do corpo)
+    # Linha 2: radar com a posição relativa dos outros robôs, rotação e alerta de proximidade
     target_thetas = []
     target_rs = []
     target_texts = []
@@ -144,7 +136,6 @@ def create_cockpit_figure(
         row=2, col=1
     )
 
-    # 5. Taxa de Viragem (Turn Rate)
     fig.add_trace(
         go.Indicator(
             mode="gauge+number",
@@ -160,7 +151,6 @@ def create_cockpit_figure(
         row=2, col=2
     )
 
-    # 6. Painel de Alarme CPA / Segurança (< 10m)
     min_dist = min([c.current_distance_m for c in cpa_results]) if cpa_results else 999.0
     min_cpa = min([c.cpa_distance_m for c in cpa_results]) if cpa_results else 999.0
     collision_imminent = any(c.is_collision_risk for c in cpa_results)
@@ -180,7 +170,7 @@ def create_cockpit_figure(
         row=2, col=3
     )
 
-    # Estilização do Dark Mode Tático
+    # Estilo escuro da figura
     fig.update_layout(
         template="plotly_dark",
         paper_bgcolor="#0b0f19",

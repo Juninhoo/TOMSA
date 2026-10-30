@@ -1,1 +1,1 @@
-"""Módulos de visualização Plotly: 3D Global, POV de câmara e Cockpit de instrumentos."""
+"""Visualização: dashboard web, cenas 3D e Cockpit."""
