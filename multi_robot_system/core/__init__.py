@@ -1,1 +1,1 @@
-"""Núcleo de processamento matemático e pipeline de dados multi-robô."""
+"""Núcleo de cálculo: leitura dos dados e funções matemáticas."""

@@ -1,6 +1,7 @@
-"""Estruturas de Dados de Trajetória e Conjunto de Dados da Missão Multi-Robô.
+"""Estruturas de dados da missão.
 
-Gere as trajetórias individuais e o alinhamento temporal global para replay sincronizado.
+RobotTrajectory guarda os dados de um robô; MissionDataset junta todos os robôs
+e permite obter o estado de cada um em qualquer instante.
 """
 
 from dataclasses import dataclass
@@ -14,57 +15,56 @@ from multi_robot_system.core.math.proximity import evaluate_proximity_and_cpa, C
 
 @dataclass
 class RobotTrajectory:
-    """Tudo o que se sabe de um robô, já alinhado e suavizado.
+    """Todos os dados de um robô, já suavizados.
 
-    Método: cada campo é uma série com uma amostra por instante de tempo. As posições vêm do filtro de Kalman com
-    suavizador RTS (pos_ned) e, para comparar, guarda-se também a posição bruta do CSV (pos_ned_raw).
-    Obtemos: um objeto com posição, atitude, velocidades e incertezas, pronto para as vistas e para o relatório.
-    Convenção: NED = Norte, Este, Down (profundidade positiva); ângulos em graus.
+    Cada campo é uma série com um valor por instante (timestamps, em segundos):
+    posição geográfica e local NED (Norte, Este, profundidade), orientação, velocidades,
+    incertezas e saltos de posição. Ângulos em graus, distâncias em metros.
     """
     robot_id: str
     label: str
     color: str
-    timestamps: np.ndarray          # (N,) segundos
-    lat: np.ndarray                 # (N,) graus
-    lon: np.ndarray                 # (N,) graus
-    alt: np.ndarray                 # (N,) metros
-    pos_ned: np.ndarray             # (3, N) [N, E, D] metros suavizados
-    quaternions: np.ndarray         # (N, 4) [qx, qy, qz, qw]
-    rot_matrices: np.ndarray        # (N, 3, 3)
-    euler_deg: np.ndarray           # (N, 3) [roll, pitch, yaw] graus
-    vel_ned: np.ndarray             # (3, N) [vN, vE, vD] m/s
-    speed_longitudinal: np.ndarray  # (N,) m/s
-    turn_rate_yaw: np.ndarray       # (N,) deg/s
-    cov_diag: np.ndarray            # (N, 6)
-    vel_body_meas: Optional[np.ndarray] = None   # (3, N) twist.linear medido [u, v, w] m/s (referencial do corpo)
-    sigma_h_decl: Optional[np.ndarray] = None    # (N,) incerteza horizontal declarada [m]
-    jump_events: Optional[list] = None           # saltos de posição no registo bruto [{t, m, depth_m}]
-    pos_ned_raw: Optional[np.ndarray] = None     # (3, N) posição NED bruta, sem suavização RTS
+    timestamps: np.ndarray
+    lat: np.ndarray
+    lon: np.ndarray
+    alt: np.ndarray
+    pos_ned: np.ndarray
+    quaternions: np.ndarray
+    rot_matrices: np.ndarray
+    euler_deg: np.ndarray
+    vel_ned: np.ndarray
+    speed_longitudinal: np.ndarray
+    turn_rate_yaw: np.ndarray
+    cov_diag: np.ndarray
+    vel_body_meas: Optional[np.ndarray] = None
+    sigma_h_decl: Optional[np.ndarray] = None
+    jump_events: Optional[list] = None
+    pos_ned_raw: Optional[np.ndarray] = None
 
     @property
     def duration_s(self) -> float:
-        """Duração do registo: último instante menos o primeiro [s]."""
+        """Duração do registo do robô, em segundos."""
         return float(self.timestamps[-1] - self.timestamps[0])
 
     @property
     def total_distance_m(self) -> float:
-        """Método: somar os passos horizontais entre amostras seguidas (raiz de dN2 + dE2). Obtemos: caminho percorrido [m]."""
+        """Distância horizontal total percorrida pelo robô, em metros."""
         diffs = np.diff(self.pos_ned[:2, :], axis=1)
         return float(np.sum(np.sqrt(diffs[0]**2 + diffs[1]**2)))
 
     @property
     def max_depth_m(self) -> float:
-        """Maior valor de D (Down) da trajetória suavizada [m]."""
+        """Profundidade máxima atingida pelo robô, em metros."""
         return float(np.max(self.pos_ned[2]))
 
     @property
     def mean_speed_m_s(self) -> float:
-        """Média do módulo da velocidade longitudinal (ao longo da proa) [m por segundo]."""
+        """Velocidade média de avanço do robô, em m/s."""
         return float(np.mean(np.abs(self.speed_longitudinal)))
 
 
 class MissionDataset:
-    """Gere as trajetórias conjuntas de múltiplos veículos com sincronização temporal."""
+    """Conjunto de todos os robôs da missão, com o tempo sincronizado."""
 
     def __init__(
         self,
@@ -76,45 +76,44 @@ class MissionDataset:
         self.trajectories = trajectories
         self.origin = (origin_lat, origin_lon, origin_h)
 
-        # Intervalo temporal global sobreposto
+        # Janela de tempo comum a todos os robôs e duração total da missão
         self.common_start = max(traj.timestamps[0] for traj in trajectories.values())
         self.common_end = min(traj.timestamps[-1] for traj in trajectories.values())
         self.has_overlap = self.common_end > self.common_start
 
-        # Tempo de referência de início absoluto (t0)
         self.t0_mission = min(traj.timestamps[0] for traj in trajectories.values())
         self.t_end_mission = max(traj.timestamps[-1] for traj in trajectories.values())
 
-        # SLERP pré-calculado para cada robô para rotações suaves
+        # Prepara a interpolação da orientação de cada robô
         self._slerp_interpolators: Dict[str, Slerp] = {}
         for r_id, traj in self.trajectories.items():
             rotations = R.from_quat(traj.quaternions)
             self._slerp_interpolators[r_id] = Slerp(traj.timestamps, rotations)
 
     def get_state_at_time(self, t: float) -> Dict[str, Dict]:
-        """Devolve o estado cinemático e atitude interpolados de todos os robôs no instante t."""
+        """Esta função devolve o estado de cada robô ativo no instante t.
+
+        Interpola a posição, a velocidade, a orientação (SLERP) e as velocidades de avanço e rotação.
+        """
         states = {}
         for r_id, traj in self.trajectories.items():
             if t < traj.timestamps[0] or t > traj.timestamps[-1]:
                 continue
 
-            # Posições NED interpoladas
+            # Interpolação da posição, velocidade, orientação e velocidades no instante t
             N = float(np.interp(t, traj.timestamps, traj.pos_ned[0]))
             E = float(np.interp(t, traj.timestamps, traj.pos_ned[1]))
             D = float(np.interp(t, traj.timestamps, traj.pos_ned[2]))
 
-            # Velocidades interpoladas
             vN = float(np.interp(t, traj.timestamps, traj.vel_ned[0]))
             vE = float(np.interp(t, traj.timestamps, traj.vel_ned[1]))
             vD = float(np.interp(t, traj.timestamps, traj.vel_ned[2]))
 
-            # Atitude por SLERP
             rot = self._slerp_interpolators[r_id]([t])
-            quat = rot.as_quat()[0]  # [qx, qy, qz, qw]
-            euler = rot.as_euler("xyz", degrees=True)[0]  # [roll, pitch, yaw]
+            quat = rot.as_quat()[0]
+            euler = rot.as_euler("xyz", degrees=True)[0]
             R_mat = rot.as_matrix()[0]
 
-            # Velocidade longitudinal e taxa angular
             v_long = float(np.interp(t, traj.timestamps, traj.speed_longitudinal))
             yaw_rate = float(np.interp(t, traj.timestamps, traj.turn_rate_yaw))
 
@@ -134,12 +133,12 @@ class MissionDataset:
         return states
 
     def evaluate_cpa_at_time(self, t: float, collision_threshold_m: float = 10.0) -> List[CPAResult]:
-        """Calcula o estado de proximidade e CPA entre todos os robôs ativos no instante t."""
+        """Calcula a proximidade e o CPA entre todos os robôs ativos no instante t."""
         states = self.get_state_at_time(t)
         return evaluate_proximity_and_cpa(states, collision_threshold_m=collision_threshold_m)
 
     def export_synchronized_csv(self, output_path: str, dt_step_s: float = 0.5) -> str:
-        """Exporta um CSV mestre com todas as trajetórias sincronizadas na grelha temporal comum."""
+        """Exporta um CSV com as posições de todos os robôs numa grelha de tempo regular."""
         start_t = self.common_start if self.has_overlap else self.t0_mission
         end_t = self.common_end if self.has_overlap else self.t_end_mission
         times = np.arange(start_t, end_t + 1e-6, dt_step_s)

@@ -1,8 +1,7 @@
-"""Carregador Robusto de Telemetria de Odometria ROS (nav_msgs/Odometry em CSV).
+"""Leitura dos ficheiros de telemetria dos robôs (CSV de odometria ROS).
 
-Lê os ficheiros de odometria do INESC TEC sem alterar os ficheiros originais no disco.
-Trata colunas, ordena cronologicamente preservando registos simultâneos,
-extrai as matrizes de covariância e converte para coordenadas NED/ENU locais.
+Lê cada ficheiro sem o modificar, ordena os dados por tempo, converte as posições
+para coordenadas locais (NED), calcula a orientação e suaviza a trajetória.
 """
 
 from pathlib import Path
@@ -23,7 +22,7 @@ from multi_robot_system.core.math.kalman_rts import (
 )
 
 
-# Colunas necessárias da mensagem ROS Odometry
+# Colunas obrigatórias no ficheiro CSV
 ODOM_REQUIRED_COLS = [
     "Time",
     "pose.pose.position.x",
@@ -37,7 +36,7 @@ ODOM_REQUIRED_COLS = [
 
 
 def parse_covariance_diagonal(cov_series: pd.Series) -> np.ndarray:
-    """Extrai os desvios-padrão [sigma_x, sigma_y, sigma_z] a partir da diagonal da covariância (36 elementos)."""
+    """Extrai a incerteza da posição (desvio-padrão em x, y e z) da matriz de covariância de cada linha."""
     stds = []
     for entry in cov_series:
         if not isinstance(entry, str):
@@ -60,7 +59,7 @@ def parse_covariance_diagonal(cov_series: pd.Series) -> np.ndarray:
 
 
 def parse_declared_horizontal_sigma(cov_series: pd.Series) -> np.ndarray:
-    """Incerteza horizontal declarada [m] = raiz de (var_x + var_y), tal como vem em pose.covariance (sem mínimos)."""
+    """Calcula a incerteza horizontal indicada no ficheiro, em metros: √(var_x + var_y)."""
     out = np.zeros(len(cov_series))
     for k, entry in enumerate(cov_series):
         if not isinstance(entry, str):
@@ -75,9 +74,10 @@ def parse_declared_horizontal_sigma(cov_series: pd.Series) -> np.ndarray:
 
 def detect_position_jumps(timestamps: np.ndarray, pos_ned_raw: np.ndarray,
                           max_speed_m_s: float = 2.5, group_s: float = 5.0) -> List[Dict]:
-    """Saltos de posição no registo bruto: velocidade implícita acima de max_speed_m_s (estes robots andam a menos de 1 m/s).
+    """Esta função deteta saltos de posição nos dados brutos.
 
-    Amostras seguidas a menos de group_s segundos contam como um só evento. m = distância total saltada [m].
+    Um salto é um deslocamento entre duas medidas que exigiria uma velocidade acima de
+    max_speed_m_s (estes robôs andam a menos de 1 m/s). Saltos próximos no tempo contam como um só.
     """
     t = np.asarray(timestamps, dtype=float)
     if len(t) < 3:
@@ -106,10 +106,10 @@ def detect_position_jumps(timestamps: np.ndarray, pos_ned_raw: np.ndarray,
 
 
 def compute_reference_origin(file_paths: List[str]) -> Tuple[float, float, float]:
-    """Origem local calculada a partir dos dados, igual à do visualizador de referência (trajectories/).
+    """Calcula a origem das coordenadas locais a partir dos dados.
 
-    - lat0, lon0: média de todas as amostras de todos os robôs.
-    - h_ref (superfície da água): média, entre robôs, da mediana das primeiras 50 amostras de altura.
+    Latitude e longitude: média de todos os pontos de todos os robôs.
+    Altitude: nível da superfície da água, estimado com as primeiras medidas de cada robô.
     """
     lats, lons, h_refs = [], [], []
     for fp in file_paths:
@@ -131,23 +131,23 @@ def load_single_robot_csv(
     apply_rts: bool = True,
     process_noise_q: float = 0.05
 ) -> Dict:
-    """Carrega um ficheiro CSV de odometria, ordena por tempo e aplica suavização RTS em memória.
+    """Esta função carrega os dados de um robô a partir do seu ficheiro CSV.
 
-    O ficheiro original em disco permanece 100% inalterado.
+    Converte as posições para NED, calcula a orientação, suaviza a trajetória (Kalman + RTS)
+    e calcula as velocidades. Devolve um dicionário com todas as séries de dados.
     """
     path = Path(file_path)
     if not path.is_file():
         raise FileNotFoundError(f"Ficheiro de telemetria não encontrado: {file_path}")
 
-    # Leitura otimizada
+    # Leitura do ficheiro, verificação das colunas e ordenação por tempo
     df = pd.read_csv(path)
 
-    # Validação de cabeçalho
     for col in ODOM_REQUIRED_COLS:
         if col not in df.columns:
             raise ValueError(f"Ficheiro {path.name} não contém a coluna obrigatória '{col}'")
 
-    # Linhas com valores em falta ou ilegíveis nas colunas obrigatórias são ignoradas (e contadas no aviso)
+    # Ignora as linhas com valores em falta ou ilegíveis (com um aviso)
     df[ODOM_REQUIRED_COLS] = df[ODOM_REQUIRED_COLS].apply(pd.to_numeric, errors="coerce")
     validas = np.isfinite(df[ODOM_REQUIRED_COLS].values).all(axis=1)
     if not validas.all():
@@ -156,10 +156,9 @@ def load_single_robot_csv(
     if len(df) < 2:
         raise ValueError(f"Ficheiro {path.name}: menos de 2 linhas válidas")
 
-    # Ordenação estrita por tempo (preservando registos repetidos conforme Q23)
     df = df.sort_values(by="Time", kind="stable").reset_index(drop=True)
 
-    # Registos com o mesmo instante ficam todos, afastados 1 ms (a interpolação exige tempos estritamente crescentes)
+    # Registos com o mesmo instante: afastados 1 ms (a interpolação exige tempos sempre crescentes)
     tempos = df["Time"].values.astype(float)
     if np.any(np.diff(tempos) <= 0):
         n_rep = int(np.sum(np.diff(tempos) <= 0))
@@ -169,36 +168,34 @@ def load_single_robot_csv(
         df["Time"] = tempos
         print(f"     [AVISO] {path.name}: {n_rep} registos com instante repetido foram afastados 1 ms")
 
+    # Posições: latitude/longitude/altitude convertidas para NED
     timestamps = df["Time"].values.astype(float)
     lat_deg = df["pose.pose.position.x"].values.astype(float)
     lon_deg = df["pose.pose.position.y"].values.astype(float)
     alt_m = df["pose.pose.position.z"].values.astype(float)
 
-    # Conversão Geodésica para NED e ENU
     N, E, D = geodetic_to_ned(lat_deg, lon_deg, alt_m, origin_lat, origin_lon, origin_h)
-    pos_ned_raw = np.stack([N, E, D], axis=0)  # (3, N)
+    pos_ned_raw = np.stack([N, E, D], axis=0)
 
-    # Quaterniões e Atitude
+    # Orientação: quaterniões, ângulos de Euler e matrizes de rotação
     qx = df["pose.pose.orientation.x"].values.astype(float)
     qy = df["pose.pose.orientation.y"].values.astype(float)
     qz = df["pose.pose.orientation.z"].values.astype(float)
     qw = df["pose.pose.orientation.w"].values.astype(float)
     qx, qy, qz, qw = normalize_quaternion(qx, qy, qz, qw)
-    quats = np.stack([qx, qy, qz, qw], axis=1)  # (N, 4)
+    quats = np.stack([qx, qy, qz, qw], axis=1)
 
     roll_deg, pitch_deg, yaw_deg = quaternion_to_euler_zyx(qx, qy, qz, qw, degrees=True)
     euler_deg = np.stack([roll_deg, pitch_deg, yaw_deg], axis=1)
 
-    # Matrizes de rotação 3D
-    rot_matrices = quaternion_to_rotation_matrix(quats)  # (N, 3, 3)
+    rot_matrices = quaternion_to_rotation_matrix(quats)
 
-    # Incerteza da telemetria a partir de pose.covariance
+    # Incerteza das medidas, seguida da suavização da trajetória (ou derivada simples se desativada)
     if "pose.covariance" in df.columns:
         cov_stds = parse_covariance_diagonal(df["pose.covariance"])
     else:
         cov_stds = np.full((len(timestamps), 3), 0.8)
 
-    # Suavização com Filtro de Kalman + Suavizador RTS
     if apply_rts and len(timestamps) > 5:
         smoother = TrajectoryKalmanRTS(process_noise_q=process_noise_q)
         pos_ned_smooth, vel_ned_smooth, cov_diag_smooth = smoother.smooth(
@@ -211,21 +208,20 @@ def load_single_robot_csv(
         vel_ned_smooth = np.gradient(pos_ned_raw, dt_v, axis=1)
         cov_diag_smooth = np.zeros((len(timestamps), 6))
 
-    # Velocidade linear medida pelo próprio robot (twist, referencial do corpo: u proa, v estibordo, w para baixo)
+    # Velocidade medida pelo próprio robô, incerteza declarada e saltos de posição (usados no Cockpit)
     twist_cols = ["twist.twist.linear.x", "twist.twist.linear.y", "twist.twist.linear.z"]
     if all(c in df.columns for c in twist_cols):
         vel_body_meas = df[twist_cols].values.astype(float).T
     else:
         vel_body_meas = np.zeros((3, len(timestamps)))
 
-    # Incerteza horizontal declarada no registo e saltos de posição do registo bruto (para o Cockpit)
     if "pose.covariance" in df.columns:
         sigma_h_decl = parse_declared_horizontal_sigma(df["pose.covariance"])
     else:
         sigma_h_decl = np.zeros(len(timestamps))
     jump_events = detect_position_jumps(timestamps, pos_ned_raw)
 
-    # Velocidade linear longitudinal e velocidade angular de viragem (Q28)
+    # Velocidade de avanço e velocidade de rotação
     v_long = compute_longitudinal_speed(vel_ned_smooth, yaw_deg)
     yaw_rate = compute_turn_rate(yaw_deg, timestamps)
 

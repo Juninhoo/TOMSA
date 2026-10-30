@@ -1,1 +1,1 @@
-"""Módulos de dados: Leitura e ordenação de odometria ROS CSV e estruturas de trajetória."""
+"""Dados: leitura dos ficheiros CSV, estruturas de trajetória e relatório da missão."""
