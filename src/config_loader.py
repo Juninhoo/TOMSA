@@ -1,7 +1,7 @@
-"""Módulo de Carregamento e Validação da Configuração YAML.
+"""Leitura e validação do ficheiro de configuração da missão (config/config.yaml).
 
-Lê e valida os parâmetros da missão: origem de referência, robôs, cores,
-frequência de replay, limiares de segurança e caminhos de exportação.
+Origem das coordenadas, robôs e respetivas cores, limiares de segurança,
+parâmetros de reprodução e caminhos dos ficheiros de saída.
 """
 
 from dataclasses import dataclass, field
@@ -12,6 +12,7 @@ import yaml
 
 @dataclass
 class OriginConfig:
+    """Origem das coordenadas locais (latitude e longitude em graus, altitude em metros)."""
     latitude: float
     longitude: float
     altitude: float
@@ -19,18 +20,21 @@ class OriginConfig:
 
 @dataclass
 class RobotConfig:
+    """Um robô: identificador, ficheiro de dados, cor e nome a mostrar."""
     id: str
     file: str
     color: str
     label: str = ""
 
     def __post_init__(self):
+        """Usa o identificador como nome quando não é indicado."""
         if not self.label:
             self.label = self.id
 
 
 @dataclass
 class SpatialConfig:
+    """Parâmetros de análise espacial: raio da vista local, limiar de colisão e escala das elipses."""
     neighbor_radius_m: float = 250.0
     collision_threshold_m: float = 30.0
     covariance_sigma: float = 2.0
@@ -38,6 +42,7 @@ class SpatialConfig:
 
 @dataclass
 class ReplayConfig:
+    """Parâmetros da reprodução da missão: passo de tempo, imagens por segundo e aceleração."""
     step_s: float = 1.0
     fps: int = 15
     speed_multiplier: float = 5.0
@@ -45,6 +50,7 @@ class ReplayConfig:
 
 @dataclass
 class OutputConfig:
+    """Caminhos dos ficheiros de saída (registo, CSV, métricas e figuras)."""
     log_file: str = "output/mission_execution.log"
     export_csv: str = "output/synchronized_trajectories.csv"
     metrics_file: str = "output/mission_metrics.json"
@@ -53,6 +59,7 @@ class OutputConfig:
 
 @dataclass
 class MissionConfig:
+    """Configuração completa da missão."""
     origin: OriginConfig
     frame: str
     robots: List[RobotConfig]
@@ -62,6 +69,7 @@ class MissionConfig:
     output: OutputConfig = field(default_factory=OutputConfig)
 
     def get_robot_by_id(self, robot_id: str) -> Optional[RobotConfig]:
+        """Devolve a configuração de um robô pelo seu identificador (ou None)."""
         for r in self.robots:
             if r.id == robot_id:
                 return r
@@ -69,7 +77,9 @@ class MissionConfig:
 
 
 def load_config(config_path: str = "config/config.yaml", base_dir: Optional[str] = None) -> MissionConfig:
-    """Carrega e valida o ficheiro de configuração YAML da missão."""
+    """Esta função lê o ficheiro de configuração, verifica os campos obrigatórios
+    e devolve um objeto MissionConfig.
+    """
     path = Path(config_path)
     if not path.is_file():
         raise FileNotFoundError(f"Ficheiro de configuração não encontrado: {config_path}")
@@ -77,7 +87,7 @@ def load_config(config_path: str = "config/config.yaml", base_dir: Optional[str]
     with open(path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
 
-    # Validar origem
+    # Origem das coordenadas
     orig_data = data.get("origin", {})
     origin = OriginConfig(
         latitude=float(orig_data.get("latitude", 41.45201666666667)),
@@ -89,7 +99,7 @@ def load_config(config_path: str = "config/config.yaml", base_dir: Optional[str]
     if frame not in ("NED", "ENU"):
         raise ValueError(f"Referencial inválido '{frame}'. Deve ser 'NED' ou 'ENU'.")
 
-    # Validar robôs
+    # Robôs (o caminho do ficheiro pode ser relativo à pasta do projeto)
     robots_data = data.get("robots", [])
     if not robots_data:
         raise ValueError("A configuração deve especificar pelo menos um robô.")
@@ -99,7 +109,6 @@ def load_config(config_path: str = "config/config.yaml", base_dir: Optional[str]
 
     for r in robots_data:
         r_file = r["file"]
-        # Resolver caminho relativo ao projeto se necessário
         candidate_file = base_path / r_file
         resolved_file = str(candidate_file if candidate_file.exists() else r_file)
 
@@ -115,7 +124,7 @@ def load_config(config_path: str = "config/config.yaml", base_dir: Optional[str]
     if selected_robot not in valid_ids:
         raise ValueError(f"selected_robot '{selected_robot}' não encontrado na lista {valid_ids}")
 
-    # Sub-configurações opcionais
+    # Parâmetros opcionais (com valores por omissão)
     sp_data = data.get("spatial", {})
     spatial = SpatialConfig(
         neighbor_radius_m=float(sp_data.get("neighbor_radius_m", 250.0)),

@@ -1,11 +1,7 @@
-"""Módulo de Funcionalidades Avançadas e Extensões ("Algo Extra").
+"""Funcionalidades extra da análise.
 
-Contém implementações de elevado valor técnico para sistemas autónomos:
-1. Elipses de Incerteza (Covariance Ellipses) a 95% de confiança através da
-   decomposição espetral (autovalores e autovetores) da matriz de covariância 6x6 do ROS.
-2. Monitorização Dinâmica de Proximidade e Cálculo do Ponto de Maior Aproximação (CPA - Closest Point of Approach).
-3. Exportação para GeoJSON (compatível com Google Earth, QGIS e Leaflet/Mapbox).
-4. Visualização 3D da trajetória e perfis batimétricos/altimétricos.
+Elipses de incerteza a 95 %, trajetórias em 3D, gráfico das distâncias entre robôs
+com o ponto de maior aproximação (CPA) e exportação para GeoJSON.
 """
 
 import json
@@ -20,21 +16,17 @@ from src.data_loader import MissionDataset, RobotTrajectory
 
 def calculate_covariance_ellipse(
     cov_matrix_2x2: np.ndarray,
-    scale_sigma: float = 2.4477  # 95% para distribuição qui-quadrado bidimensional
+    scale_sigma: float = 2.4477
 ) -> Tuple[float, float, float]:
-    """Calcula os semi-eixos maior e menor e o ângulo de inclinação da elipse de incerteza.
+    """Esta função calcula a elipse de incerteza a partir de uma matriz de covariância 2x2.
 
-    Retorna:
-        semi_major_m: comprimento do semi-eixo maior
-        semi_minor_m: comprimento do semi-eixo menor
-        angle_deg: ângulo de rotação em graus
+    Devolve o semi-eixo maior, o semi-eixo menor (em metros) e a inclinação (em graus).
     """
     eigvals, eigvecs = np.linalg.eigh(cov_matrix_2x2)
 
-    # Garantir que os autovalores são positivos
+    # Valores próprios positivos e ordenados: dão o tamanho dos semi-eixos; o vetor próprio dá a inclinação
     eigvals = np.maximum(eigvals, 1e-12)
 
-    # Ordenar por autovalor decrescente
     order = eigvals.argsort()[::-1]
     eigvals = eigvals[order]
     eigvecs = eigvecs[:, order]
@@ -42,7 +34,6 @@ def calculate_covariance_ellipse(
     semi_major = scale_sigma * np.sqrt(eigvals[0])
     semi_minor = scale_sigma * np.sqrt(eigvals[1])
 
-    # Ângulo do autovetor principal em relação ao eixo horizontal
     angle_rad = np.arctan2(eigvecs[1, 0], eigvecs[0, 0])
     angle_deg = np.degrees(angle_rad)
 
@@ -53,21 +44,19 @@ def plot_3d_mission_trajectories(
     dataset: MissionDataset,
     output_file: Optional[str] = "docs/figures/mission_trajectories_3d.pdf"
 ) -> Tuple[plt.Figure, plt.Axes]:
-    """Gera visualização 3D das trajetórias com profundidade/altitude real."""
+    """Desenha as trajetórias de todos os robôs em 3D (Este, Norte, altitude) e grava a figura."""
     fig = plt.figure(figsize=(10, 8), dpi=150)
     ax = fig.add_subplot(111, projection="3d")
 
     for r_id, traj in dataset.trajectories.items():
-        # Em NED: x = North, y = East, z = Down (-z é Up/Altitude)
         north = traj.pos_ned[0]
         east = traj.pos_ned[1]
-        altitude = -traj.pos_ned[2]  # Convertido para cota positiva
+        altitude = -traj.pos_ned[2]
 
         ax.plot(east, north, altitude, color=traj.color, linewidth=1.8, label=traj.label)
         ax.scatter([east[0]], [north[0]], [altitude[0]], color=traj.color, marker="o", s=50)
         ax.scatter([east[-1]], [north[-1]], [altitude[-1]], color=traj.color, marker="s", s=60)
 
-    # Origem
     ax.scatter([0], [0], [0], color="black", marker="P", s=100, label="Origem de Superfície (0,0,0)")
 
     ax.set_title("Visualização Tridimensional das Trajetórias (Aguçadoura)", fontsize=11, fontweight="bold")
@@ -91,17 +80,19 @@ def plot_inter_robot_distance_matrix(
     output_file: Optional[str] = "docs/figures/proximity_analysis.pdf",
     alert_threshold_m: float = 30.0
 ) -> Tuple[plt.Figure, plt.Axes]:
-    """Gera análise gráfica contínua da distância entre todos os pares de robôs com deteção de CPA."""
+    """Esta função desenha a distância entre cada par de robôs ao longo do tempo
+    e assinala o momento de maior aproximação (CPA) de cada par.
+    """
     robot_ids = list(dataset.trajectories.keys())
     t_min = dataset.common_start
     t_max = dataset.common_end
     dt = 1.0
     t_grid = np.arange(t_min, t_max, dt)
-    t_min_rel = (t_grid - t_min) / 60.0  # Em minutos
+    t_min_rel = (t_grid - t_min) / 60.0
 
     fig, ax = plt.subplots(figsize=(10, 5), dpi=150)
 
-    # Linha do limiar de perigo
+    # Linha do limiar de alerta, depois uma curva por par de robôs com o CPA assinalado
     ax.axhline(alert_threshold_m, color="red", linestyle="--", linewidth=1.5,
                label=f"Limiar de Alerta de Proximidade ({alert_threshold_m:.0f}m)")
 
@@ -152,21 +143,18 @@ def export_trajectories_to_geojson(
     dataset: MissionDataset,
     output_path: str = "output/mission_trajectories.geojson"
 ) -> str:
-    """Exporta as trajetórias para o formato padrão GeoJSON (WGS-84 RFC 7946).
-
-    Permite importar diretamente as rotas no Google Earth, QGIS, ArcGIS ou mapas web.
-    """
+    """Exporta a origem e as trajetórias dos robôs para GeoJSON (Google Earth, QGIS...)."""
     out_p = Path(output_path)
     out_p.parent.mkdir(parents=True, exist_ok=True)
 
     features = []
 
-    # 1. Ponto da Origem
+    # Ponto da origem, depois uma linha por robô
     features.append({
         "type": "Feature",
         "geometry": {
             "type": "Point",
-            "coordinates": [dataset.origin[1], dataset.origin[0], dataset.origin[2]]  # [Lon, Lat, Alt]
+            "coordinates": [dataset.origin[1], dataset.origin[0], dataset.origin[2]]
         },
         "properties": {
             "name": "Origem da Missão (Aguçadoura)",
@@ -174,7 +162,6 @@ def export_trajectories_to_geojson(
         }
     })
 
-    # 2. Linhas de trajetória por robô
     for r_id, traj in dataset.trajectories.items():
         coords = [[float(lon), float(lat), float(alt)] for lon, lat, alt in zip(traj.lon, traj.lat, traj.alt)]
         features.append({

@@ -1,14 +1,8 @@
-"""Visualizador 3D Interativo em Primeira Pessoa (Body Frame View) com Plotly.
+"""Visualizador 3D (Plotly) do ponto de vista de cada robô.
 
-Permite observar o ambiente 3D a partir da perspetiva própria de cada robô autónomo
-(referencial do corpo: +X Proa/Frente, +Y Estibordo/Direita, +Z Para Cima).
-
-Funcionalidades:
-- Comutação instantânea de perspetiva entre robôs (Robot 1, Robot 4, Robot 7)
-- Teclas de atalho no teclado ('1', '2', '3') para mudar de câmara em tempo real
-- Controlo temporal por Slider de Replay
-- Trajetórias relativas dos alvos transformadas para a atitude e posição atual do observador
-- Exportação para HTML autónomo e visualização no navegador Web
+Mostra os outros robôs e as suas trajetórias vistos pelo robô escolhido
+(x frente, y direita, z cima), com barra do tempo e teclas 1, 2, 3 para mudar de robô.
+Gera um ficheiro HTML autónomo.
 """
 
 from pathlib import Path
@@ -26,8 +20,8 @@ def build_body_view_figure(
     stride_traj: int = 5,
     num_slider_steps: int = 60
 ) -> Tuple[go.Figure, str]:
-    """Gera a figura interativa Plotly com vista 3D em 1ª pessoa no Body Frame."""
-    # Obter lista de robôs ordenados
+    """Esta função constrói a figura 3D com os botões de mudança de robô e a barra do tempo."""
+    # Robôs e grelha de tempo comum, com posições e orientações interpoladas
     robots = sorted(list(dataset.trajectories.keys()))
     if not dataset.has_overlap:
         raise ValueError("O dataset não possui janela temporal sobreposta comum.")
@@ -37,7 +31,6 @@ def build_body_view_figure(
     t_common = np.arange(t_start, t_end + 1e-5, 1.0)
     n_steps = len(t_common)
 
-    # Pré-computar posições NED e rotações interpoladas para cada robô
     data_sync = {}
     for r_id in robots:
         traj = dataset.trajectories[r_id]
@@ -45,7 +38,6 @@ def build_body_view_figure(
         for dim in range(3):
             ned_interp[:, dim] = np.interp(t_common, traj.timestamps, traj.pos_ned[dim])
 
-        # Rotações via SLERP do dataset
         rots = dataset._slerps[r_id](t_common)
         data_sync[r_id] = {
             "pos": ned_interp,
@@ -54,31 +46,29 @@ def build_body_view_figure(
             "label": traj.label
         }
 
-    # Função auxiliar para calcular coordenadas no corpo do observador
     def _get_body_coords(obs_id: str, tgt_id: str, step: int) -> np.ndarray:
+        """Posição do robô tgt_id vista pelo robô obs_id no passo de tempo step."""
         p_obs = data_sync[obs_id]["pos"][step]
         r_b = data_sync[obs_id]["rot"][step]
         p_tgt = data_sync[tgt_id]["pos"][step]
-        # p_rel_body = R_b^T * (p_tgt - p_obs)
         return r_b.T @ (p_tgt - p_obs)
 
-    # Função auxiliar para calcular trajetória relativa no corpo do observador (com decimação)
     def _get_body_trajectory(obs_id: str, tgt_id: str, step: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Trajetória completa do robô tgt_id vista pelo robô obs_id (z para cima)."""
         p_obs = data_sync[obs_id]["pos"][step]
         r_b = data_sync[obs_id]["rot"][step]
         pos_decimated = data_sync[tgt_id]["pos"][::stride_traj]
         pts = (r_b.T @ (pos_decimated - p_obs).T).T
-        # Coordenadas: x=frente (proa), y=estibordo (direita), z=cima (inverso de down)
         return pts[:, 0], pts[:, 1], -pts[:, 2]
 
     def _get_view_payload(obs_id: str, step: int = 0) -> Dict[str, list]:
+        """Coordenadas de todos os traços para o observador obs_id no passo step (usado pelos botões e pela barra do tempo)."""
         targets = [r for r in robots if r != obs_id]
-        x_list = [[0]]  # Traço 0: Observador
+        x_list = [[0]]
         y_list = [[0]]
         z_list = [[0]]
         text_list = [[f"Observador ({obs_id})"]]
 
-        # Marcadores dos outros robôs
         for tgt in targets:
             c = _get_body_coords(obs_id, tgt, step)
             x_list.append([float(c[0])])
@@ -86,13 +76,11 @@ def build_body_view_figure(
             z_list.append([float(-c[2])])
             text_list.append([f"{tgt} ({data_sync[tgt]['label']})"])
 
-        # Vetor de proa (+X)
         x_list.append([0, 30])
         y_list.append([0, 0])
         z_list.append([0, 0])
         text_list.append(None)
 
-        # Trajetórias relativas dos outros robôs
         for tgt in targets:
             xt, yt, zt = _get_body_trajectory(obs_id, tgt, step)
             x_list.append(xt.tolist())
@@ -105,7 +93,7 @@ def build_body_view_figure(
     default_obs = robots[0]
     fig = go.Figure()
 
-    # Traço 0: Observador (Origem local)
+    # Traços: observador, outros robôs, seta da proa e trajetórias relativas
     fig.add_trace(go.Scatter3d(
         x=[0], y=[0], z=[0],
         mode="markers+text",
@@ -118,7 +106,6 @@ def build_body_view_figure(
     targets_default = [r for r in robots if r != default_obs]
     d0 = _get_view_payload(default_obs, 0)
 
-    # Traços para posições atuais dos robôs vizinhos
     for idx, tgt in enumerate(targets_default, start=1):
         fig.add_trace(go.Scatter3d(
             x=d0["x"][idx], y=d0["y"][idx], z=d0["z"][idx],
@@ -129,7 +116,6 @@ def build_body_view_figure(
             name=f"Posição {tgt}"
         ))
 
-    # Traço: Vetor de Proa (+X Body)
     fig.add_trace(go.Scatter3d(
         x=[0, 30], y=[0, 0], z=[0, 0],
         mode="lines+text",
@@ -139,7 +125,6 @@ def build_body_view_figure(
         name="Vetor de Proa (Heading)"
     ))
 
-    # Traços: Trajetórias relativas
     start_tr_idx = 1 + len(targets_default) + 1
     for idx, tgt in enumerate(targets_default):
         tr_trace_idx = start_tr_idx + idx
@@ -151,7 +136,7 @@ def build_body_view_figure(
             name=f"Trajetória Relativa {tgt}"
         ))
 
-    # Botões para comutação de perspetiva
+    # Botões para escolher o robô observador e barra do tempo
     buttons = []
     for k, obs in enumerate(robots):
         vdata = _get_view_payload(obs, 0)
@@ -181,7 +166,6 @@ def build_body_view_figure(
         buttons=buttons
     )]
 
-    # Slider temporal de replay
     slider_steps = []
     step_stride = max(1, n_steps // num_slider_steps)
     for step_k in range(0, n_steps, step_stride):
@@ -207,6 +191,7 @@ def build_body_view_figure(
         currentvalue={"prefix": "Tempo de Replay da Missão: "}
     )]
 
+    # Teclas 1, 2, 3 para mudar de observador (JavaScript acrescentado à página)
     post_script = """
     document.addEventListener('keydown', function(event) {
         var buttons = document.querySelectorAll('.updatemenu-button');
@@ -248,7 +233,7 @@ def launch_interactive_3d(
     export_html_path: str = "output/mission_body_view_3d.html",
     open_browser: bool = True
 ) -> go.Figure:
-    """Carrega dados da missão, gera o visualizador 3D em Plotly e exporta HTML."""
+    """Carrega a missão, gera a figura, grava o HTML e (opcionalmente) abre-o no navegador."""
     dataset, _ = load_mission_dataset(config_path)
     fig, post_script = build_body_view_figure(dataset, stride_traj=5, num_slider_steps=60)
 

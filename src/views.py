@@ -1,11 +1,7 @@
-"""Módulo de Visualização Gráfica: Vistas Global e Local (Matplotlib).
+"""Figuras Matplotlib da missão.
 
-Gera representações visuais estáticas e interativas das trajetórias multi-robô:
-1. Global View: Trajetórias de todos os robôs no referencial de navegação comum (NED ou ENU),
-   com indicação de posições atuais, vetores de orientação (heading) e origem de missão.
-2. Local View: Visão centrada no robô selecionado (origem (0,0), orientado na direção da proa),
-   com anéis radar de alcance e robôs vizinhos transformados para o referencial do corpo.
-3. Perfis temporais de distância relativa e Azimute/Elevação/Range (AER).
+Vista Global (todos os robôs no mesmo referencial), vista 3D, Vista Local centrada
+num robô (como um radar) e gráficos de azimute, elevação e distância ao longo do tempo.
 """
 
 from pathlib import Path
@@ -25,50 +21,46 @@ def plot_global_view(
     ax: Optional[plt.Axes] = None,
     show_uncertainty: bool = False
 ) -> Tuple[plt.Figure, plt.Axes]:
-    """Desenha a Vista Global com todos os robôs no referencial comum."""
+    """Esta função desenha a Vista Global: a trajetória de todos os robôs vista de cima,
+    com a posição, a direção e (opcionalmente) a elipse de incerteza de cada um no instante dado.
+    """
     if ax is None:
         fig, ax = plt.subplots(figsize=(9, 8), dpi=150)
     else:
         fig = ax.figure
 
-    # Plotar a origem da missão (0, 0)
+    # Origem da missão e instante a mostrar
     ax.scatter([0], [0], color="black", marker="P", s=120, zorder=6, label="Origem da Missão (0,0)")
 
-    # Se não for passado um tempo específico, usa o início comum
     t = current_time if current_time is not None else dataset.common_start
     current_states = dataset.get_state_at(t)
 
     for r_id, traj in dataset.trajectories.items():
         if frame == "NED":
-            # Para visualização cartográfica intuitiva:
-            # Eixo Horizontal = Este (y_ned)
-            # Eixo Vertical = Norte (x_ned)
-            x_plot = traj.pos_ned[1]  # East
-            y_plot = traj.pos_ned[0]  # North
+            # Eixo horizontal = Este, eixo vertical = Norte
+            x_plot = traj.pos_ned[1]
+            y_plot = traj.pos_ned[0]
             x_label = "Este / East [m]"
             y_label = "Norte / North [m]"
         else:
-            x_plot = traj.pos_enu[0]  # East
-            y_plot = traj.pos_enu[1]  # North
+            x_plot = traj.pos_enu[0]
+            y_plot = traj.pos_enu[1]
             x_label = "East [m]"
             y_label = "North [m]"
 
-        # Trajetória completa (linha contínua suave)
+        # Trajetória completa e ponto de partida
         ax.plot(x_plot, y_plot, color=traj.color, alpha=0.45, linewidth=1.5, label=f"Trajetória {traj.label}")
 
-        # Ponto inicial
         ax.scatter(x_plot[0], y_plot[0], color=traj.color, marker="o", facecolors="none",
                    edgecolors=traj.color, s=70, linewidths=1.5, zorder=4)
 
-        # Se o robô tiver estado no instante atual t
+        # Posição atual, seta da direção (rumo medido a partir do Norte), nome e elipse de incerteza
         if r_id in current_states:
             st = current_states[r_id]
             if frame == "NED":
                 cx = st["pos_ned"][1]
                 cy = st["pos_ned"][0]
                 heading_rad = np.radians(st["heading_deg"])
-                # No plano (East, North), o heading a partir do Norte no sentido horário:
-                # vx = sin(heading), vy = cos(heading)
                 dx = 18.0 * np.sin(heading_rad)
                 dy = 18.0 * np.cos(heading_rad)
             else:
@@ -78,15 +70,11 @@ def plot_global_view(
                 dx = 18.0 * np.sin(heading_rad)
                 dy = 18.0 * np.cos(heading_rad)
 
-            # Ponto atual
             ax.scatter([cx], [cy], color=traj.color, s=110, zorder=5, edgecolors="black", linewidths=1.2)
-            # Vetor de proa/rumo (heading)
             ax.arrow(cx, cy, dx, dy, head_width=6, head_length=8, fc=traj.color, ec="black", zorder=6)
-            # Rótulo de texto
             ax.text(cx + 8, cy + 8, f"{traj.label}\n({st['heading_deg']:.1f}°)", fontsize=8,
                     bbox=dict(boxstyle="round,pad=0.2", fc="white", ec=traj.color, alpha=0.85), zorder=7)
 
-            # Elipse de incerteza da posição (opcional)
             if show_uncertainty:
                 sig_n = st["pos_std_ned"][0]
                 sig_e = st["pos_std_ned"][1]
@@ -112,13 +100,7 @@ def plot_3d_global_view(
     elev: Optional[float] = 25.0,
     azim: Optional[float] = -55.0
 ) -> Tuple[plt.Figure, plt.Axes]:
-    """Desenha a Vista Espacial Tridimensional (3D) interativa com profundidade/altitude real.
-
-    Eixos 3D:
-        - X: Este / East [m]
-        - Y: Norte / North [m]
-        - Z: Altitude Relativa [m] (-Down em NED)
-    """
+    """Desenha a vista 3D das trajetórias, com a posição e a direção de cada robô no instante dado."""
     if ax is None:
         fig = plt.figure(figsize=(9, 8), dpi=110)
         ax = fig.add_subplot(111, projection="3d")
@@ -128,36 +110,30 @@ def plot_3d_global_view(
     t = current_time if current_time is not None else dataset.common_start
     current_states = dataset.get_state_at(t)
 
-    # Origem de Superfície (0, 0, 0)
+    # Origem, depois trajetória 3D, posição e direção de cada robô
     ax.scatter([0], [0], [0], color="black", marker="P", s=100, zorder=6, label="Origem Missão (0,0,0)")
 
     for r_id, traj in dataset.trajectories.items():
         east = traj.pos_ned[1]
         north = traj.pos_ned[0]
-        altitude = -traj.pos_ned[2]  # Cota positiva em relação à origem
+        altitude = -traj.pos_ned[2]
 
-        # Trajetória 3D
         ax.plot(east, north, altitude, color=traj.color, alpha=0.55, linewidth=1.6, label=traj.label)
 
-        # Início
         ax.scatter([east[0]], [north[0]], [altitude[0]], color=traj.color, marker="o", s=40, alpha=0.7)
 
-        # Posição instantânea no instante t
         if r_id in current_states:
             st = current_states[r_id]
             cx = st["pos_ned"][1]
             cy = st["pos_ned"][0]
             cz = -st["pos_ned"][2]
 
-            # Marcador 3D do robô
             ax.scatter([cx], [cy], [cz], color=traj.color, s=120, edgecolors="black", linewidths=1.2, zorder=7)
 
-            # Vetor 3D de orientação (proa/heading e atitude tridimensional)
             from src.frames import quaternion_to_rotation_matrix
             R_b2ned = quaternion_to_rotation_matrix(*st["quat"])
-            fwd_body = np.array([1.0, 0.0, 0.0])  # Eixo x do corpo
+            fwd_body = np.array([1.0, 0.0, 0.0])
             fwd_ned = R_b2ned @ fwd_body
-            # Converter para (Este, Norte, Altitude)
             fwd_east = fwd_ned[1] * 22.0
             fwd_north = fwd_ned[0] * 22.0
             fwd_alt = -fwd_ned[2] * 22.0
@@ -189,11 +165,8 @@ def plot_local_view(
     collision_threshold_m: float = 30.0,
     ax: Optional[plt.Axes] = None
 ) -> Tuple[plt.Figure, plt.Axes]:
-    """Desenha a Vista Local centrada no robô selecionado (Body Frame).
-
-    Convenção do Referencial do Corpo:
-        - Eixo Vertical (x_body): Proa (Ahead / Forward)
-        - Eixo Horizontal (y_body): Estibordo / Direita (Starboard / Right)
+    """Esta função desenha a Vista Local: o robô selecionado no centro, com a proa para cima,
+    anéis de distância, zona de perigo e os outros robôs vistos a partir dele.
     """
     if ax is None:
         fig, ax = plt.subplots(figsize=(8, 8), dpi=150)
@@ -212,42 +185,35 @@ def plot_local_view(
     p_sel = sel_state["pos_ned"]
     q_sel = sel_state["quat"]
 
-    # Desenhar anéis de distância tipo Radar
+    # Anéis de distância, zona de perigo e eixos do robô (frente para cima, direita para a direita)
     range_steps = np.arange(50.0, max_range_m + 1.0, 50.0)
     for r in range_steps:
         circle = patches.Circle((0, 0), r, fill=False, color="gray", linestyle=":", alpha=0.5)
         ax.add_patch(circle)
         ax.text(0, r + 2, f"{int(r)} m", color="gray", fontsize=7, ha="center")
 
-    # Zona de perigo / alerta de colisão
     alert_circle = patches.Circle((0, 0), collision_threshold_m, fill=True, facecolor="red", alpha=0.12,
                                   linestyle="--", edgecolor="red", label=f"Alerta Proximidade ({collision_threshold_m:.0f}m)")
     ax.add_patch(alert_circle)
 
-    # Eixos ortogonais do robô (Proa / Estibordo)
     ax.axhline(0, color="gray", linestyle="-", linewidth=0.8, alpha=0.7)
     ax.axvline(0, color="gray", linestyle="-", linewidth=0.8, alpha=0.7)
 
-    # Robô selecionado na origem (0, 0)
-    # Eixo vertical = Proa (x_fwd), Eixo horizontal = Estibordo (y_stbd)
-    # Seta indicando o vetor de avanço
     ax.scatter([0], [0], color=sel_traj.color, s=140, marker="^", edgecolors="black", linewidths=1.5, zorder=6,
                label=f"{sel_traj.label} (Origem Local)")
     ax.arrow(0, 0, 0, 25.0, head_width=7, head_length=9, fc=sel_traj.color, ec="black", zorder=7)
     ax.text(0, -18, f"PROA (0°)\nHeading: {sel_state['heading_deg']:.1f}°", ha="center", fontsize=8, fontweight="bold")
 
-    # Identificadores de setores náuticos
     ax.text(max_range_m * 0.85, 0, "Estibordo (+y)\n[Direita]", ha="center", va="center", color="#555", fontsize=8)
     ax.text(-max_range_m * 0.85, 0, "Bombordo (-y)\n[Esquerda]", ha="center", va="center", color="#555", fontsize=8)
     ax.text(0, -max_range_m * 0.85, "Ré (-x)\n[Atrás]", ha="center", va="center", color="#555", fontsize=8)
 
-    # Plotar robôs vizinhos transformados para o referencial local
+    # Outros robôs, convertidos para as coordenadas do robô selecionado, com linha de visada e etiqueta
     for r_id, st in states.items():
         if r_id == selected_robot_id:
             continue
 
         p_neigh = st["pos_ned"]
-        # Transformação para o referencial do corpo
         p_body = transform_to_local_robot_frame(p_neigh, p_sel, q_sel)
         x_fwd = p_body[0]
         y_stbd = p_body[1]
@@ -255,17 +221,14 @@ def plot_local_view(
         bearing_rel, elev_rel, dist_rel = calculate_relative_aer_body(p_body)
         neigh_traj = dataset.trajectories[r_id]
 
-        # Posição no gráfico: Horizontal = y_stbd, Vertical = x_fwd
         is_collision = dist_rel <= collision_threshold_m
         marker_color = "red" if is_collision else neigh_traj.color
 
         ax.scatter([y_stbd], [x_fwd], color=marker_color, s=120, edgecolors="black", linewidths=1.2, zorder=5,
                    label=f"{neigh_traj.label} (dist: {dist_rel:.1f}m)")
 
-        # Linha de visada (Line of Sight)
         ax.plot([0, y_stbd], [0, x_fwd], color=neigh_traj.color, linestyle="--", linewidth=1.2, alpha=0.7)
 
-        # Rótulo com distância e marcação relativa (bearing)
         status_txt = "ALERTA COLISÃO!" if is_collision else f"Dist: {dist_rel:.1f} m\nBrg: {bearing_rel:+.1f}°"
         ax.text(y_stbd + 5, x_fwd + 5, f"{neigh_traj.label}\n{status_txt}", fontsize=8,
                 bbox=dict(boxstyle="round,pad=0.2", fc="white", ec=marker_color, alpha=0.9), zorder=7)
@@ -288,11 +251,11 @@ def plot_relative_aer_timeseries(
     reference_robot_id: str,
     dt: float = 2.0
 ) -> Tuple[plt.Figure, np.ndarray]:
-    """Gera gráficos temporais de Azimute Relativo (Bearing), Elevação e Distância (AER)."""
+    """Desenha a evolução do azimute, da elevação e da distância dos outros robôs vistos pelo robô de referência."""
     t_min = dataset.common_start
     t_max = dataset.common_end
     t_grid = np.arange(t_min, t_max, dt)
-    t_rel_min = (t_grid - t_min) / 60.0  # Em minutos
+    t_rel_min = (t_grid - t_min) / 60.0
 
     ref_traj = dataset.trajectories[reference_robot_id]
     other_ids = [r_id for r_id in dataset.trajectories.keys() if r_id != reference_robot_id]
@@ -349,12 +312,12 @@ def export_all_report_figures(
     output_dir: str = "docs/figures",
     selected_robot_id: str = "Robot 1"
 ) -> List[str]:
-    """Gera e guarda todas as figuras de alta resolução para o relatório LaTeX."""
+    """Gera e grava em PDF e PNG as figuras do relatório (Vista Global, Vista Local e gráficos AER)."""
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     generated_files = []
 
-    # 1. Global View estática
+    # Vista Global, Vista Local e gráficos AER
     fig_glob, _ = plot_global_view(dataset, current_time=dataset.common_start + 600.0, frame="NED")
     f_glob = out_path / "global_view_trajectories.pdf"
     fig_glob.savefig(f_glob, bbox_inches="tight")
@@ -362,7 +325,6 @@ def export_all_report_figures(
     plt.close(fig_glob)
     generated_files.append(str(f_glob))
 
-    # 2. Local View estática
     fig_loc, _ = plot_local_view(dataset, selected_robot_id=selected_robot_id,
                                  current_time=dataset.common_start + 600.0)
     f_loc = out_path / "local_view_body_frame.pdf"
@@ -371,7 +333,6 @@ def export_all_report_figures(
     plt.close(fig_loc)
     generated_files.append(str(f_loc))
 
-    # 3. Perfis AER
     fig_aer, _ = plot_relative_aer_timeseries(dataset, reference_robot_id=selected_robot_id)
     f_aer = out_path / "aer_relative_profiles.pdf"
     fig_aer.savefig(f_aer, bbox_inches="tight")

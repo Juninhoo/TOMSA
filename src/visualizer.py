@@ -1,14 +1,8 @@
-"""Módulo de Replay Interativo da Missão (Mission Replay & Multi-View GUI).
+"""Janela interativa Matplotlib para reproduzir a missão.
 
-Implementação de Alta Performance com Atualização Persistente de Artistas
-(Object Recycling / Blitting) para garantir resposta instantânea a 60+ FPS:
-1. Os fundos estáticos (trajetórias completas, anéis radar, grelhas e eixos)
-   são desenhados UMA ÚNICA VEZ na inicialização.
-2. A cada frame do replay ou movimento do slider, apenas as posições dos robôs,
-   vetores de orientação e rótulos são atualizados na memória gráfica.
-3. Não há chamadas a ax.clear(), eliminando o lag e a sobrecarga de redesenho.
-4. Painéis simultâneos: Vista Global 2D (NED), Vista Espacial 3D e Radar Local.
-5. Seletor de velocidade dinâmica (10x, 25x, 50x, 100x).
+Três painéis lado a lado (Vista Global 2D, vista 3D e radar local) com barra do tempo,
+Play/Pausa, escolha da velocidade e do robô. Para ser rápido, o fundo é desenhado uma só vez
+e, a cada imagem, só se movem os robôs.
 """
 
 from typing import Dict, Optional, Tuple
@@ -26,7 +20,7 @@ from src.frames import (
 
 
 class MissionVisualizer:
-    """Controlador otimizado de alta performance para replay interativo 2D e 3D."""
+    """Janela de reprodução interativa da missão (2D, 3D e radar)."""
 
     def __init__(
         self,
@@ -36,6 +30,7 @@ class MissionVisualizer:
         max_range_m: float = 250.0,
         collision_threshold_m: float = 30.0
     ):
+        """Guarda os parâmetros, cria a janela, os painéis e os controlos, e desenha o instante inicial."""
         self.dataset = dataset
         self.selected_robot_id = selected_robot_id
         self.speed_multiplier = speed_multiplier
@@ -48,9 +43,7 @@ class MissionVisualizer:
         self.is_playing = False
         self.timer = None
 
-        # -------------------------------------------------------------
-        # 1. Configurar Janela e Layout Panorâmico
-        # -------------------------------------------------------------
+        # Janela e disposição: 3 painéis em cima, controlos em baixo
         self.fig = plt.figure(figsize=(18, 8.5), dpi=105)
         self.fig.canvas.manager.set_window_title(
             "TOMSA 2026 - Multi-Robot Trajectory Viewer (Alta Performance 2D + 3D)"
@@ -68,7 +61,6 @@ class MissionVisualizer:
         self.ax_3d = self.fig.add_subplot(gs[0, 1], projection="3d")
         self.ax_local = self.fig.add_subplot(gs[0, 2])
 
-        # Painel inferior para controlos
         gs_ctrl = gs[1, :].subgridspec(2, 9, height_ratios=[1.0, 1.0], hspace=0.35, wspace=0.25)
 
         self.ax_slider = self.fig.add_subplot(gs_ctrl[0, 1:7])
@@ -81,9 +73,7 @@ class MissionVisualizer:
         self.ax_btn_view3d = self.fig.add_subplot(gs_ctrl[1, 7])
         self.ax_radio = self.fig.add_subplot(gs_ctrl[:, 0])
 
-        # -------------------------------------------------------------
-        # 2. Inicializar Widgets
-        # -------------------------------------------------------------
+        # Controlos: barra do tempo, botões e escolha do robô
         self.slider = Slider(
             self.ax_slider,
             "Tempo de Missão [s]",
@@ -121,26 +111,19 @@ class MissionVisualizer:
         self.radio = RadioButtons(self.ax_radio, robot_ids, active=active_idx, activecolor="#E63946")
         self.radio.on_clicked(self._on_robot_selected)
 
-        # -------------------------------------------------------------
-        # 3. Desenho ÚNICO da Camada Estática (Background) e Artistas Móveis
-        # -------------------------------------------------------------
+        # Desenho do fundo, posições iniciais e temporizador da animação (~25 imagens/s)
         self._init_static_background_and_artists()
 
-        # Atualizar posições iniciais dos robôs
         self._update_artists_positions(self.t_min)
 
-        # Temporizador para animação fluida (~25 fps, dt = 40ms)
         self.timer = self.fig.canvas.new_timer(interval=40)
         self.timer.add_callback(self._on_timer_tick)
 
     def _init_static_background_and_artists(self):
-        """Desenha todo o cenário estático uma única vez e instancia os objetos móveis."""
-        # ==========================================
-        # A. PAINEL 1: VISTA GLOBAL 2D (NED)
-        # ==========================================
+        """Desenha uma só vez o que não muda (trajetórias, anéis, eixos) e cria os elementos que se movem."""
+        # Painel 1: Vista Global 2D (trajetórias completas, pontos de partida, marcadores e setas)
         self.ax_2d.scatter([0], [0], color="black", marker="P", s=110, zorder=6, label="Origem Missão (0,0)")
 
-        # Calcular limites globais com margem
         all_east = np.concatenate([t.pos_ned[1] for t in self.dataset.trajectories.values()])
         all_north = np.concatenate([t.pos_ned[0] for t in self.dataset.trajectories.values()])
         margin = 35.0
@@ -157,22 +140,18 @@ class MissionVisualizer:
         self.artists_2d_labels = {}
 
         for r_id, traj in self.dataset.trajectories.items():
-            # Trajetória estática completa (decimada 1/5 para leveza sem perder detalhe gráfico)
             self.ax_2d.plot(
                 traj.pos_ned[1, ::5], traj.pos_ned[0, ::5],
                 color=traj.color, alpha=0.4, linewidth=1.5,
                 label=f"Rota {traj.label}"
             )
-            # Ponto de partida
             self.ax_2d.scatter([traj.pos_ned[1, 0]], [traj.pos_ned[0, 0]],
                                color=traj.color, marker="o", facecolors="none",
                                edgecolors=traj.color, s=55, linewidths=1.2)
 
-            # ARTISTAS MÓVEIS 2D (instanciados uma única vez na posição inicial):
             self.artists_2d_markers[r_id] = self.ax_2d.scatter(
                 [0], [0], color=traj.color, s=115, edgecolors="black", linewidths=1.2, zorder=7
             )
-            # Seta de proa (quiver com escala fixa em metros)
             self.artists_2d_quiver[r_id] = self.ax_2d.quiver(
                 [0], [0], [1], [0], angles="xy", scale_units="xy", scale=0.055,
                 color=traj.color, width=0.007, headwidth=4, headlength=5, zorder=8
@@ -185,9 +164,7 @@ class MissionVisualizer:
 
         self.ax_2d.legend(loc="upper left", fontsize=7.5, framealpha=0.9)
 
-        # ==========================================
-        # B. PAINEL 2: VISTA ESPACIAL 3D
-        # ==========================================
+        # Painel 2: vista 3D
         self.ax_3d.scatter([0], [0], [0], color="black", marker="P", s=90, label="Origem (0,0,0)")
 
         all_alt = np.concatenate([-t.pos_ned[2] for t in self.dataset.trajectories.values()])
@@ -206,16 +183,13 @@ class MissionVisualizer:
         self.artists_3d_labels = {}
 
         for r_id, traj in self.dataset.trajectories.items():
-            # Linha estática 3D (decimada 1/10 para acelerar a renderização e ordenação em profundidade)
             self.ax_3d.plot(
                 traj.pos_ned[1, ::10], traj.pos_ned[0, ::10], -traj.pos_ned[2, ::10],
                 color=traj.color, alpha=0.45, linewidth=1.5, label=traj.label
             )
 
-            # ARTISTAS MÓVEIS 3D:
             self.artists_3d_markers[r_id] = self.ax_3d.scatter([0], [0], [0], color=traj.color, s=110,
                                                                edgecolors="black", zorder=7)
-            # Segmento 3D de proa (extremamente rápido de atualizar via set_data_3d)
             line, = self.ax_3d.plot([0, 0], [0, 0], [0, 0], color=traj.color, linewidth=2.4, zorder=8)
             self.artists_3d_lines_fwd[r_id] = line
 
@@ -225,28 +199,22 @@ class MissionVisualizer:
 
         self.ax_3d.legend(loc="upper left", fontsize=7.5, framealpha=0.9)
 
-        # ==========================================
-        # C. PAINEL 3: VISTA LOCAL RADAR (BODY FRAME)
-        # ==========================================
-        # Anéis radar estáticos
+        # Painel 3: radar local (anéis, zona de perigo, eixos, robô no centro e vizinhos)
         range_steps = np.arange(50.0, self.max_range_m + 1.0, 50.0)
         for r in range_steps:
             circle = patches.Circle((0, 0), r, fill=False, color="gray", linestyle=":", alpha=0.5)
             self.ax_local.add_patch(circle)
             self.ax_local.text(0, r + 2, f"{int(r)} m", color="gray", fontsize=7, ha="center")
 
-        # Círculo de perigo / proximidade
         alert_circle = patches.Circle(
             (0, 0), self.collision_threshold_m, fill=True, facecolor="red", alpha=0.12,
             linestyle="--", edgecolor="red", label=f"Alerta ({self.collision_threshold_m:.0f}m)"
         )
         self.ax_local.add_patch(alert_circle)
 
-        # Eixos do corpo estáticos
         self.ax_local.axhline(0, color="gray", linestyle="-", linewidth=0.8, alpha=0.7)
         self.ax_local.axvline(0, color="gray", linestyle="-", linewidth=0.8, alpha=0.7)
 
-        # Símbolo do robô no centro apontando para a Proa (+x)
         self.center_robot_marker = self.ax_local.scatter([0], [0], color="#E63946", s=130, marker="^",
                                                          edgecolors="black", linewidths=1.5, zorder=6)
         self.ax_local.arrow(0, 0, 0, 22.0, head_width=6, head_length=8, fc="#E63946", ec="black", zorder=7)
@@ -264,7 +232,6 @@ class MissionVisualizer:
         self.ax_local.set_aspect("equal", adjustable="box")
         self.title_local = self.ax_local.set_title("Vista Local (Body Frame) | t = 0.0 s", fontsize=11, fontweight="bold")
 
-        # Artistas móveis para robôs vizinhos no radar
         self.artists_local_markers = {}
         self.artists_local_los = {}
         self.artists_local_labels = {}
@@ -285,40 +252,36 @@ class MissionVisualizer:
         self.ax_local.legend(loc="upper right", fontsize=7.5, framealpha=0.9)
 
     def _update_artists_positions(self, t: float):
-        """Atualiza EXCLUSIVAMENTE as coordenadas dos artistas móveis (Tempo gasto < 2ms!)."""
+        """Atualiza só as posições dos elementos que se movem, para o instante t."""
         states = self.dataset.get_state_at(t)
         rel_t = t - self.t_min
 
-        # 1. Atualizar Títulos
+        # Títulos, depois posições na vista 2D e 3D, depois o radar local
         self.title_2d.set_text(f"Vista Global 2D (NED) | t = {rel_t:.1f} s")
         self.title_3d.set_text(f"Vista Espacial 3D | t = {rel_t:.1f} s")
         sel_label = self.dataset.trajectories[self.selected_robot_id].label
         self.title_local.set_text(f"Vista Local (Body: {sel_label}) | t = {rel_t:.1f} s")
 
-        # 2. Atualizar Artistas na Vista 2D e 3D
         for r_id, traj in self.dataset.trajectories.items():
             if r_id not in states:
                 continue
             st = states[r_id]
-            cx = float(st["pos_ned"][1])   # East
-            cy = float(st["pos_ned"][0])   # North
-            cz = float(-st["pos_ned"][2])  # Altitude (-Down)
+            cx = float(st["pos_ned"][1])
+            cy = float(st["pos_ned"][0])
+            cz = float(-st["pos_ned"][2])
 
             heading_rad = np.radians(st["heading_deg"])
             dx = float(np.sin(heading_rad))
             dy = float(np.cos(heading_rad))
 
-            # Atualizar marcador 2D (move o "íman"):
             self.artists_2d_markers[r_id].set_offsets([[cx, cy]])
             self.artists_2d_quiver[r_id].set_offsets([[cx, cy]])
             self.artists_2d_quiver[r_id].set_UVC(dx, dy)
             self.artists_2d_labels[r_id].set_position((cx + 8, cy + 8))
             self.artists_2d_labels[r_id].set_text(f"{traj.label}\n({st['heading_deg']:.0f}°)")
 
-            # Atualizar marcador 3D:
             self.artists_3d_markers[r_id]._offsets3d = ([cx], [cy], [cz])
 
-            # Vetor 3D de atitude (quiver)
             R_b2ned = quaternion_to_rotation_matrix(*st["quat"])
             fwd_ned = R_b2ned @ np.array([1.0, 0.0, 0.0])
             fe = float(fwd_ned[1] * 20.0)
@@ -329,20 +292,17 @@ class MissionVisualizer:
             self.artists_3d_labels[r_id].set_position_3d((cx + 5, cy + 5, cz + 2))
             self.artists_3d_labels[r_id].set_text(f"{traj.label}\n({st['heading_deg']:.0f}°)")
 
-        # 3. Atualizar Vista Local (Radar)
         if self.selected_robot_id in states:
             sel_st = states[self.selected_robot_id]
             p_sel = sel_st["pos_ned"]
             q_sel = sel_st["quat"]
 
-            # Atualizar cor do robô central e texto
             sel_color = self.dataset.trajectories[self.selected_robot_id].color
             self.center_robot_marker.set_facecolors([sel_color])
             self.center_info_text.set_text(f"PROA (0°)\nHeading: {sel_st['heading_deg']:.1f}°")
 
             for r_id, traj in self.dataset.trajectories.items():
                 if r_id == self.selected_robot_id:
-                    # O próprio robô está no centro (0, 0), esconde o marcador vizinho
                     self.artists_local_markers[r_id].set_visible(False)
                     self.artists_local_los[r_id].set_visible(False)
                     self.artists_local_labels[r_id].set_visible(False)
@@ -363,7 +323,6 @@ class MissionVisualizer:
                 brg_rel, el_rel, dist_rel = calculate_relative_aer_body(p_body)
                 is_alert = dist_rel <= self.collision_threshold_m
 
-                # Deslocar íman no radar:
                 self.artists_local_markers[r_id].set_offsets([[y_stbd, x_fwd]])
                 self.artists_local_los[r_id].set_data([0, y_stbd], [0, x_fwd])
 
@@ -378,13 +337,15 @@ class MissionVisualizer:
         self.fig.canvas.draw_idle()
 
     # -------------------------------------------------------------
-    # Handlers de Eventos dos Controlos
+    # Reações aos controlos
     # -------------------------------------------------------------
     def _on_slider_changed(self, val):
+        """Barra do tempo: redesenha no instante escolhido."""
         self.current_t = self.t_min + val
         self._update_artists_positions(self.current_t)
 
     def _toggle_play(self, event):
+        """Botão Play/Pausa."""
         self.is_playing = not self.is_playing
         if self.is_playing:
             self.btn_play.label.set_text("Pause ||")
@@ -395,6 +356,7 @@ class MissionVisualizer:
         self.fig.canvas.draw_idle()
 
     def _on_timer_tick(self):
+        """Avança o tempo a cada 40 ms durante a reprodução (volta ao início no fim)."""
         dt = 0.040 * self.speed_multiplier
         new_t = self.current_t + dt
         if new_t >= self.t_max:
@@ -407,23 +369,28 @@ class MissionVisualizer:
         self.slider.set_val(self.current_t - self.t_min)
 
     def step_time(self, delta_s: float):
+        """Avança ou recua o tempo delta_s segundos."""
         new_t = np.clip(self.current_t + delta_s, self.t_min, self.t_max)
         self.slider.set_val(new_t - self.t_min)
 
     def set_time(self, target_t: float):
+        """Vai para o instante target_t."""
         self.slider.set_val(target_t - self.t_min)
 
     def _set_speed(self, multiplier: float):
+        """Muda a velocidade de reprodução."""
         self.speed_multiplier = multiplier
 
     def _reset_3d_camera(self, event):
+        """Repõe o ângulo de visão da vista 3D."""
         self.ax_3d.view_init(elev=25.0, azim=-55.0)
         self.fig.canvas.draw_idle()
 
     def _on_robot_selected(self, label: str):
+        """Muda o robô do radar local."""
         self.selected_robot_id = label
         self._update_artists_positions(self.current_t)
 
     def show(self):
-        """Apresenta a interface interativa."""
+        """Abre a janela."""
         plt.show()

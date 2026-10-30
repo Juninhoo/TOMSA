@@ -1,7 +1,7 @@
-"""Módulo de Registo (Logging) e Exportação de Métricas da Missão.
+"""Registo da execução e exportação das métricas da missão.
 
-Regista a execução do sistema, gera ficheiros de log e exporta resumos de telemetria
-(distâncias percorridas, velocidades, distâncias mínimas inter-robôs / CPA).
+Escreve o ficheiro de registo e calcula, para cada robô, a distância percorrida e as velocidades
+e, para cada par de robôs, a distância mínima (CPA).
 """
 
 import json
@@ -14,14 +14,14 @@ from src.data_loader import MissionDataset
 
 
 def setup_logger(log_file_path: str = "output/mission_execution.log") -> logging.Logger:
-    """Configura o sistema de logging com saída para ficheiro e consola."""
+    """Prepara o registo de mensagens, no ecrã e num ficheiro."""
     path = Path(log_file_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     logger = logging.getLogger("TOMSA")
     logger.setLevel(logging.INFO)
 
-    # Limpar handlers anteriores para evitar duplicações
+    # Remove saídas antigas (evita mensagens repetidas), depois escreve no ficheiro e no ecrã
     if logger.hasHandlers():
         logger.handlers.clear()
 
@@ -30,13 +30,11 @@ def setup_logger(log_file_path: str = "output/mission_execution.log") -> logging
         datefmt="%Y-%m-%d %H:%M:%S"
     )
 
-    # File handler
     fh = logging.FileHandler(path, mode="w", encoding="utf-8")
     fh.setLevel(logging.INFO)
     fh.setFormatter(formatter)
     logger.addHandler(fh)
 
-    # Console handler
     ch = logging.StreamHandler()
     ch.setLevel(logging.INFO)
     ch.setFormatter(formatter)
@@ -46,7 +44,9 @@ def setup_logger(log_file_path: str = "output/mission_execution.log") -> logging
 
 
 def calculate_mission_metrics(dataset: MissionDataset, dt: float = 1.0) -> Dict:
-    """Calcula estatísticas de desempenho, distâncias totais e aproximações mínimas (CPA)."""
+    """Esta função calcula as métricas da missão: dados de cada robô e,
+    para cada par de robôs, a distância mínima, o instante em que acontece e a distância média.
+    """
     metrics = {
         "mission": {
             "origin": {
@@ -63,7 +63,7 @@ def calculate_mission_metrics(dataset: MissionDataset, dt: float = 1.0) -> Dict:
         "inter_robot_proximity": []
     }
 
-    # Estatísticas individuais por robô
+    # Estatísticas de cada robô
     for r_id, traj in dataset.trajectories.items():
         speeds = np.linalg.norm(traj.linear_vel, axis=1)
         metrics["robots"][r_id] = {
@@ -77,7 +77,7 @@ def calculate_mission_metrics(dataset: MissionDataset, dt: float = 1.0) -> Dict:
             "end_coords_deg": [float(traj.lat[-1]), float(traj.lon[-1]), float(traj.alt[-1])]
         }
 
-    # Análise de proximidade entre todos os pares durante o intervalo comum
+    # Distâncias entre cada par de robôs, segundo a segundo, na janela de tempo comum
     robot_ids = list(dataset.trajectories.keys())
     t_grid = np.arange(dataset.common_start, dataset.common_end, dt)
 
@@ -117,21 +117,20 @@ def export_mission_reports(
     csv_path: str = "output/synchronized_trajectories.csv",
     logger: Optional[logging.Logger] = None
 ) -> Tuple[str, str]:
-    """Gera e grava o JSON de métricas e o CSV sincronizado."""
+    """Calcula as métricas e grava-as em JSON, com o CSV das trajetórias sincronizadas."""
     if logger is None:
         logger = setup_logger()
 
     logger.info("A calcular métricas globais e aproximações mínimas (CPA)...")
     metrics = calculate_mission_metrics(dataset)
 
-    # Gravar JSON
+    # Gravação do JSON e do CSV
     m_path = Path(metrics_path)
     m_path.parent.mkdir(parents=True, exist_ok=True)
     with open(m_path, "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2, ensure_ascii=False)
     logger.info(f"Métricas gravadas em: {metrics_path}")
 
-    # Gravar CSV sincronizado
     logger.info("A gerar e exportar série temporal sincronizada...")
     _, df_sync = dataset.generate_synchronized_timeseries(dt=1.0)
     c_path = Path(csv_path)

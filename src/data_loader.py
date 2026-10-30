@@ -1,11 +1,8 @@
-"""Módulo de Carregamento, Pré-Processamento e Sincronização Temporal dos Dados.
+"""Leitura dos ficheiros de telemetria e sincronização no tempo.
 
-Lê ficheiros CSV de mensagens de Odometria ROS anonimizadas da missão INESC TEC (Aguçadoura).
-Executa:
-1. Extração de Latitude, Longitude, Altitude e Atitude (Quaternions).
-2. Conversão para referenciais cartesianos locais NED e ENU em relação à origem da missão.
-3. Extração e cálculo de matrizes de covariância e velocidades.
-4. Sincronização temporal e interpolação (linear para posições, SLERP para rotações).
+Lê os CSV de odometria (ROS) da missão, converte as posições para coordenadas locais
+(NED e ENU), extrai a orientação, as velocidades e a incerteza, e interpola o estado
+de cada robô em qualquer instante (linear para posições, SLERP para orientações).
 """
 
 from dataclasses import dataclass
@@ -21,37 +18,41 @@ from src.frames import quaternion_to_euler, normalize_quaternion
 
 @dataclass
 class RobotTrajectory:
+    """Dados de um robô: tempos, posições (geográficas, NED e ENU), orientação, velocidades e incerteza."""
     robot_id: str
     label: str
     color: str
-    timestamps: np.ndarray       # (N,) segundos
-    lat: np.ndarray              # (N,) graus
-    lon: np.ndarray              # (N,) graus
-    alt: np.ndarray              # (N,) metros
-    pos_ned: np.ndarray          # (3, N) [N, E, D] metros
-    pos_enu: np.ndarray          # (3, N) [E, N, U] metros
-    quaternions: np.ndarray      # (N, 4) [qx, qy, qz, qw]
-    euler_deg: np.ndarray        # (N, 3) [roll, pitch, yaw] graus
-    linear_vel: np.ndarray       # (N, 3) [vx, vy, vz] m/s
-    angular_vel: np.ndarray      # (N, 3) [wx, wy, wz] rad/s
-    pos_std_ned: np.ndarray      # (N, 3) [sigma_N, sigma_E, sigma_D] metros
+    timestamps: np.ndarray
+    lat: np.ndarray
+    lon: np.ndarray
+    alt: np.ndarray
+    pos_ned: np.ndarray
+    pos_enu: np.ndarray
+    quaternions: np.ndarray
+    euler_deg: np.ndarray
+    linear_vel: np.ndarray
+    angular_vel: np.ndarray
+    pos_std_ned: np.ndarray
 
     @property
     def duration(self) -> float:
+        """Duração do registo, em segundos."""
         return float(self.timestamps[-1] - self.timestamps[0])
 
     @property
     def total_distance(self) -> float:
+        """Distância horizontal total percorrida, em metros."""
         diffs = np.diff(self.pos_ned[:2, :], axis=1)
         return float(np.sum(np.sqrt(diffs[0]**2 + diffs[1]**2)))
 
     @property
     def mean_speed(self) -> float:
+        """Velocidade média, em m/s."""
         return float(np.mean(np.linalg.norm(self.linear_vel, axis=1)))
 
 
 class MissionDataset:
-    """Gere as trajetórias de múltiplos robôs com sincronização temporal."""
+    """Conjunto dos robôs da missão, com o tempo sincronizado."""
 
     def __init__(
         self,
@@ -63,40 +64,38 @@ class MissionDataset:
         self.trajectories = trajectories
         self.origin = (origin_lat, origin_lon, origin_alt)
 
-        # Determinar intervalo de tempo sobreposto comum
+        # Janela de tempo comum a todos os robôs e interpoladores de orientação (SLERP)
         self.common_start = max(traj.timestamps[0] for traj in trajectories.values())
         self.common_end = min(traj.timestamps[-1] for traj in trajectories.values())
         self.has_overlap = self.common_end > self.common_start
 
-        # Interpoladores temporais pré-calculados para cada robô
         self._slerps: Dict[str, Slerp] = {}
         for r_id, traj in self.trajectories.items():
             rotations = R.from_quat(traj.quaternions)
             self._slerps[r_id] = Slerp(traj.timestamps, rotations)
 
     def get_state_at(self, t: float) -> Dict[str, Dict]:
-        """Devolve o estado interpolado (posição, orientação, velocidade) de todos os robôs no instante t."""
+        """Esta função devolve o estado de cada robô ativo no instante t:
+        posição, orientação (SLERP), velocidade e incerteza.
+        """
         states = {}
         for r_id, traj in self.trajectories.items():
             if t < traj.timestamps[0] or t > traj.timestamps[-1]:
                 continue
 
-            # Interpolação linear da posição NED
+            # Interpolação da posição, orientação, velocidade e incerteza
             n = float(np.interp(t, traj.timestamps, traj.pos_ned[0]))
             e = float(np.interp(t, traj.timestamps, traj.pos_ned[1]))
             d = float(np.interp(t, traj.timestamps, traj.pos_ned[2]))
 
-            # Interpolação SLERP da atitude
             rot = self._slerps[r_id]([t])
-            quat = rot.as_quat()[0]  # [qx, qy, qz, qw]
-            euler = rot.as_euler("xyz", degrees=True)[0]  # [roll, pitch, yaw]
+            quat = rot.as_quat()[0]
+            euler = rot.as_euler("xyz", degrees=True)[0]
 
-            # Velocidades lineares interpoladas
             vx = float(np.interp(t, traj.timestamps, traj.linear_vel[:, 0]))
             vy = float(np.interp(t, traj.timestamps, traj.linear_vel[:, 1]))
             vz = float(np.interp(t, traj.timestamps, traj.linear_vel[:, 2]))
 
-            # Incerteza interpolada
             sig_n = float(np.interp(t, traj.timestamps, traj.pos_std_ned[:, 0]))
             sig_e = float(np.interp(t, traj.timestamps, traj.pos_std_ned[:, 1]))
 
@@ -114,9 +113,8 @@ class MissionDataset:
         return states
 
     def generate_synchronized_timeseries(self, dt: float = 1.0) -> Tuple[np.ndarray, pd.DataFrame]:
-        """Gera uma tabela regular sincronizada com passo dt para exportação e análise."""
+        """Gera uma tabela com as posições, rumos e velocidades de todos os robôs a cada dt segundos."""
         if not self.has_overlap:
-            # Se não houver sobreposição, usa o intervalo global
             t_min = min(traj.timestamps[0] for traj in self.trajectories.values())
             t_max = max(traj.timestamps[-1] for traj in self.trajectories.values())
         else:
@@ -152,7 +150,10 @@ def load_robot_csv(
     lon0: float,
     h0: float
 ) -> RobotTrajectory:
-    """Lê um ficheiro CSV de odometria do robô e calcula todas as coordenadas."""
+    """Esta função lê o ficheiro CSV de um robô e calcula todas as suas grandezas:
+    posições NED e ENU, orientação, velocidades e incerteza da posição.
+    """
+    # Procura o ficheiro (também nas pastas data/ do projeto)
     path = Path(file_path)
     if not path.is_file():
         for candidate in [
@@ -167,7 +168,7 @@ def load_robot_csv(
         else:
             raise FileNotFoundError(f"Ficheiro de dados não encontrado: {file_path}")
 
-    # Leitura otimizada do CSV com pandas
+    # Leitura das colunas úteis, ordenação por tempo e remoção de duplicados
     cols_to_use = [
         "Time",
         "pose.pose.position.x",
@@ -188,21 +189,19 @@ def load_robot_csv(
 
     df = pd.read_csv(path, usecols=cols_to_use)
 
-    # Ordenar rigorosamente por timestamp
     df = df.sort_values(by="Time").reset_index(drop=True)
     df = df.drop_duplicates(subset=["Time"]).reset_index(drop=True)
 
+    # Posições, orientação, velocidades e incerteza
     timestamps = df["Time"].values.astype(float)
     lat = df["pose.pose.position.x"].values.astype(float)
     lon = df["pose.pose.position.y"].values.astype(float)
     alt = df["pose.pose.position.z"].values.astype(float)
 
-    # Converter geodésico para NED e ENU
     N, E, D = geodetic_to_ned(lat, lon, alt, lat0, lon0, h0)
     pos_ned = np.stack([N, E, D], axis=0)
     pos_enu = np.stack([E, N, -D], axis=0)
 
-    # Quaternions
     qx = df["pose.pose.orientation.x"].values.astype(float)
     qy = df["pose.pose.orientation.y"].values.astype(float)
     qz = df["pose.pose.orientation.z"].values.astype(float)
@@ -210,11 +209,9 @@ def load_robot_csv(
     qx, qy, qz, qw = normalize_quaternion(qx, qy, qz, qw)
     quats = np.stack([qx, qy, qz, qw], axis=1)
 
-    # Ângulos de Euler
     roll, pitch, yaw = quaternion_to_euler(qx, qy, qz, qw, degrees=True)
     euler_deg = np.stack([roll, pitch, yaw], axis=1)
 
-    # Velocidades
     vx = df["twist.twist.linear.x"].values.astype(float)
     vy = df["twist.twist.linear.y"].values.astype(float)
     vz = df["twist.twist.linear.z"].values.astype(float)
@@ -225,8 +222,8 @@ def load_robot_csv(
     wz = df["twist.twist.angular.z"].values.astype(float)
     angular_vel = np.stack([wx, wy, wz], axis=1)
 
-    # Extração rápida da diagonal da covariância (var_x, var_y, var_z)
     def parse_diag_cov(cov_str):
+        """Extrai o desvio-padrão em x, y e z da matriz de covariância (texto com 36 valores)."""
         clean = cov_str.strip("() \n\r")
         parts = clean.split(",")
         var_x = float(parts[0])
@@ -255,7 +252,7 @@ def load_robot_csv(
 
 
 def load_mission_dataset(config_path: str = "config/config.yaml") -> Tuple[MissionDataset, "MissionConfig"]:
-    """Função utilitária de conveniência para carregar o conjunto completo da missão."""
+    """Carrega a configuração e os dados de todos os robôs da missão."""
     from src.config_loader import load_config
     config = load_config(config_path)
 
